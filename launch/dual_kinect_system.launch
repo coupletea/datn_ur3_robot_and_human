@@ -1,0 +1,439 @@
+<launch>
+  <!-- [HM0a] Reduce libfreenect2 transfer pool for dual Kinect stability. -->
+  <env name="LIBFREENECT2_RGB_TRANSFERS" value="3"/>
+  <env name="LIBFREENECT2_IR_TRANSFERS" value="4"/>
+  <env name="LIBFREENECT2_RGB_TRANSFER_SIZE" value="1048576"/>
+
+  <arg name="target_frame" default="base_link"/>
+  <arg name="auto_execute" default="false"/>
+
+  <arg name="front_camera_name" default="front"/>
+  <arg name="front_camera_device_index" default="-1"/>
+  <arg name="front_camera_serial" default="000441552747"/>
+  <arg name="front_camera_packet_pipeline" default="cuda"/>
+  <arg name="front_rgb_only_mode" default="true"/>
+  <arg name="front_enable_depth" default="true"/>
+  <arg name="front_camera_startup_delay_sec" default="0.0"/>
+  <arg name="front_camera_frame" default="kinect_front_ir_optical_frame"/>
+  <arg name="front_debug_image_flip_horizontal" default="true"/>
+  <arg name="front_debug_image_flip_vertical" default="false"/>
+  <arg name="front_tf_xyz" default="0.7 0.01 1.44"/>
+  <arg name="front_tf_rpy" default="1.5708 0.0 -0.82"/>
+
+  <arg name="back_camera_name" default="back"/>
+  <arg name="back_camera_device_index" default="-1"/>
+  <arg name="back_camera_serial" default="501294742442"/>
+  <arg name="back_camera_packet_pipeline" default="cpu"/>
+  <arg name="back_rgb_only_mode" default="false"/>
+  <arg name="back_enable_depth" default="true"/>
+  <arg name="back_camera_startup_delay_sec" default="0.0"/>
+  <arg name="back_camera_frame" default="kinect_back_ir_optical_frame"/>
+  <arg name="back_debug_image_flip_horizontal" default="true"/>
+  <arg name="back_debug_image_flip_vertical" default="false"/>
+  <arg name="back_tf_xyz" default="-2.46 0.26 1.44"/>
+  <arg name="back_tf_rpy" default="1.5708 0.0 2.22"/>
+
+  <arg name="front_skeleton_camera_topic" default="/kinect_front/human_skeleton_camera"/>
+  <arg name="front_skeleton_base_topic" default="/kinect_front/human_skeleton_base"/>
+  <arg name="front_skeleton_status_topic" default="/kinect_front/human_skeleton_status"/>
+  <arg name="front_raw_image_topic" default="/kinect_front/kinect_raw/image_raw"/>
+  <arg name="front_debug_image_topic" default="/kinect_front/kinect_skeleton/image_raw"/>
+  <arg name="back_skeleton_camera_topic" default="/kinect_back/human_skeleton_camera"/>
+  <arg name="back_skeleton_base_topic" default="/kinect_back/human_skeleton_base"/>
+  <arg name="back_skeleton_status_topic" default="/kinect_back/human_skeleton_status"/>
+  <arg name="back_raw_image_topic" default="/kinect_back/kinect_raw/image_raw"/>
+  <arg name="back_debug_image_topic" default="/kinect_back/kinect_skeleton/image_raw"/>
+
+  <arg name="human_skeleton_base_topic" default="/human_skeleton_base"/>
+  <arg name="human_skeleton_fusion_status_topic" default="/human_skeleton_fusion_status"/>
+  <arg name="human_skeleton_fusion_marker_topic" default="/human_skeleton_fusion_markers"/>
+  <arg name="human_collision_object_topic" default="/human_collision_object"/>
+  <arg name="human_obstacle_status_topic" default="/human_obstacle_status"/>
+  <arg name="moveit_scene_status_topic" default="/moveit_scene_status"/>
+  <arg name="object_id" default="human_skeleton"/>
+  <arg name="tracked_joint_ids"  value="0,11,12,13,14,15,16,23,24"/>
+  <arg name="connection_pairs"   value="11,13;13,15;12,14;14,16;11,12;11,23;12,24;23,24"/>
+  <arg name="min_valid_joints"   value="3"/>
+  <arg name="apply_planning_scene_service" default="/apply_planning_scene"/>
+  <arg name="get_planning_scene_service" default="/get_planning_scene"/>
+  <arg name="wait_for_service_timeout_sec" default="10.0"/>
+  <arg name="scene_remove_timeout_sec" default="1.0"/>
+  <arg name="scene_status_interval_sec" default="1.0"/>
+  <arg name="max_collision_primitives" default="120"/>
+  <arg name="max_object_age_sec" default="1.0"/>
+  <arg name="enable_scene_confirmation" default="true"/>
+  <arg name="enable_acm_debug" default="false"/>
+  <arg name="allow_empty_add_object" default="false"/>
+  <arg name="allowed_primitive_types" default="SPHERE,CYLINDER"/>
+  <arg name="min_apply_interval_sec" default="0.02"/>
+  <arg name="reject_bad_quaternion" default="true"/>
+  <arg name="remove_on_shutdown" default="true"/>
+  <arg name="enable_moveit_scene_sync" default="true"/>
+  <arg name="require_moveit_scene_ready" default="false"/>
+  <arg name="scene_status_timeout_sec" default="1.0"/>
+  <arg name="scene_ready_keywords" default="SCENE_OBJECT_APPLIED,SCENE_READY,SCENE_OBJECT_CONFIRMED"/>
+  <arg name="scene_removed_keywords" default="SCENE_OBJECT_REMOVED,SCENE_OBJECT_CONFIRMED_REMOVED,SCENE_EMPTY"/>
+  <arg name="use_legacy_human_point" default="false"/>
+  <arg name="human_point_selection_mode" default="body_only"/>
+  <arg name="max_human_points_for_astar" default="20"/>
+  <arg name="selected_body_joint_ids" default="11,12,13,14,15,16,23,24"/>
+  <arg name="publish_split_planning_time" default="true"/>
+
+  <arg name="enable_yolo_person_segmentation" default="false"/>
+  <arg name="yolo_model_path" default="yolov8n-seg.pt"/>
+  <arg name="yolo_device" default="cuda:0"/>
+  <arg name="yolo_conf_threshold" default="0.05"/>
+  <arg name="yolo_iou_threshold" default="0.85"/>
+  <arg name="person_mask_min_area_ratio" default="0.0001"/>
+  <arg name="person_mask_dilate_px" default="80"/>
+
+  <arg name="enable_holistic" default="true"/>
+  <arg name="holistic_model_complexity" default="0"/>
+  <arg name="holistic_min_detection_confidence" default="0.05"/>
+  <arg name="holistic_min_tracking_confidence" default="0.05"/>
+  <arg name="tracker_rate_hz" default="5"/>
+  <arg name="tracker_frame_timeout_ms" default="3000"/>
+  <arg name="reopen_on_frame_timeout" default="true"/>
+  <arg name="restart_process_on_frame_timeout" default="true"/>
+  <arg name="frame_timeout_reopen_threshold" default="2"/>
+  <arg name="camera_reopen_backoff_sec" default="1.0"/>
+  <arg name="camera_respawn_delay_sec" default="3.0"/>
+  <arg name="body_min_core_points" default="3"/>
+  <arg name="shoulder_width_range" default="0.08,0.85"/>
+  <arg name="torso_length_range" default="0.15,1.20"/>
+
+  <arg name="enable_hand_detection" default="false"/>
+  <arg name="min_hand_valid_points" default="3"/>
+  <arg name="hand_wrist_attach_max_distance_m" default="0.40"/>
+  <arg name="hand_wrist_attach_max_distance_px" default="200"/>
+  <arg name="allow_hand_side_swap" default="true"/>
+
+  <arg name="temporal_confirm_frames" default="1"/>
+  <arg name="temporal_lost_frames" default="60"/>
+  <arg name="temporal_max_jump_m" default="0.0"/>
+  <arg name="temporal_smoothing_alpha" default="0.05"/>
+  <arg name="enable_arm_spatial_filter" default="true"/>
+  <arg name="arm_median_window" default="2"/>
+  <arg name="arm_max_jump_m" default="0.5"/>
+  <arg name="enable_arm_length_lock" default="true"/>
+  <arg name="arm_calib_frames" default="50"/>
+  <arg name="enable_hip_clamp" default="false"/>
+  <arg name="hip_clamp_offset_m" default="0.30"/>
+
+  <arg name="draw_person_mask" default="false"/>
+  <arg name="draw_rejected_raw" default="false"/>
+
+  <arg name="fusion_rate_hz" default="30"/>
+  <arg name="max_input_age_sec" default="0.40"/>
+  <arg name="sync_max_stamp_diff_sec" default="0.25"/>
+  <arg name="allow_single_camera_fallback" default="true"/>
+  <arg name="empty_publish_on_no_input" default="true"/>
+  <arg name="publish_source_markers" default="false"/>
+
+  <!-- Temporary eye-to-hand TF placeholders. Replace these with real calibration for each Kinect. -->
+  <node pkg="tf"
+        type="static_transform_publisher"
+        name="base_to_kinect_front_link"
+        args="$(arg front_tf_xyz) $(arg front_tf_rpy) $(arg target_frame) kinect_front_link 100" />
+
+  <node pkg="tf"
+        type="static_transform_publisher"
+        name="base_to_kinect_front_ir_optical"
+        args="$(arg front_tf_xyz) $(arg front_tf_rpy) $(arg target_frame) $(arg front_camera_frame) 100" />
+
+  <node pkg="tf"
+        type="static_transform_publisher"
+        name="base_to_kinect_back_link"
+        args="$(arg back_tf_xyz) $(arg back_tf_rpy) $(arg target_frame) kinect_back_link 100" />
+
+  <node pkg="tf"
+        type="static_transform_publisher"
+        name="base_to_kinect_back_ir_optical"
+        args="$(arg back_tf_xyz) $(arg back_tf_rpy) $(arg target_frame) $(arg back_camera_frame) 100" />
+
+  <group ns="kinect_front">
+    <node pkg="ur3_hrc_planner"
+          type="kinect_skeleton_tracker.py"
+          name="kinect_skeleton_tracker"
+          required="false"
+          respawn="true"
+          respawn_delay="$(arg camera_respawn_delay_sec)"
+          output="screen">
+      <param name="camera_name" value="$(arg front_camera_name)" />
+      <param name="camera_device_index" value="$(arg front_camera_device_index)" />
+      <param name="camera_serial" type="str" value="$(arg front_camera_serial)" />
+      <param name="camera_packet_pipeline" type="str" value="$(arg front_camera_packet_pipeline)" />
+      <param name="startup_delay_sec" value="$(arg front_camera_startup_delay_sec)" />
+      <param name="camera_frame" value="$(arg front_camera_frame)" />
+      <param name="target_frame" value="$(arg target_frame)" />
+      <param name="human_skeleton_camera_topic" value="$(arg front_skeleton_camera_topic)" />
+      <param name="human_skeleton_base_topic" value="$(arg front_skeleton_base_topic)" />
+      <param name="status_topic" value="$(arg front_skeleton_status_topic)" />
+      <param name="raw_image_topic" value="$(arg front_raw_image_topic)" />
+      <param name="debug_image_topic" value="$(arg front_debug_image_topic)" />
+      <param name="publish_static_tf" value="false" />
+      <param name="rate_hz" value="10" />
+      <param name="min_visibility" value="0.05" />
+      <param name="frame_timeout_ms" value="$(arg tracker_frame_timeout_ms)" />
+      <param name="rgb_only_mode" value="$(arg front_rgb_only_mode)" />
+      <param name="enable_depth" value="$(arg front_enable_depth)" />
+      <param name="reopen_on_frame_timeout" value="$(arg reopen_on_frame_timeout)" />
+      <param name="restart_process_on_frame_timeout" value="$(arg restart_process_on_frame_timeout)" />
+      <param name="frame_timeout_reopen_threshold" value="$(arg frame_timeout_reopen_threshold)" />
+      <param name="camera_reopen_backoff_sec" value="$(arg camera_reopen_backoff_sec)" />
+      <param name="status_interval_sec" value="1.0" />
+      <param name="debug_image_flip_horizontal" value="$(arg front_debug_image_flip_horizontal)" />
+      <param name="debug_image_flip_vertical" value="$(arg front_debug_image_flip_vertical)" />
+      <param name="enable_yolo_person_segmentation" value="true" />
+      <param name="yolo_async_thread" value="true" />
+      <param name="yolo_gpu_memory_fraction" value="0.70" />
+      <param name="yolo_model_path" value="$(arg yolo_model_path)" />
+      <param name="yolo_device" value="$(arg yolo_device)" />
+      <param name="yolo_conf_threshold" value="$(arg yolo_conf_threshold)" />
+      <param name="yolo_iou_threshold" value="$(arg yolo_iou_threshold)" />
+      <param name="person_mask_min_area_ratio" value="$(arg person_mask_min_area_ratio)" />
+      <param name="person_mask_dilate_px" value="$(arg person_mask_dilate_px)" />
+      <param name="require_person_mask_for_pose" value="false" />
+      <param name="require_person_mask_for_hands" value="false" />
+      <param name="enable_holistic" value="$(arg enable_holistic)" />
+      <param name="holistic_model_complexity" value="0" />
+      <param name="holistic_min_detection_confidence" value="$(arg holistic_min_detection_confidence)" />
+      <param name="holistic_min_tracking_confidence" value="$(arg holistic_min_tracking_confidence)" />
+      <param name="body_min_core_points" value="$(arg body_min_core_points)" />
+      <param name="shoulder_width_range" value="$(arg shoulder_width_range)" />
+      <param name="torso_length_range" value="$(arg torso_length_range)" />
+      <param name="enable_hand_detection" value="$(arg enable_hand_detection)" />
+      <param name="min_hand_valid_points" value="$(arg min_hand_valid_points)" />
+      <param name="hand_wrist_attach_max_distance_m" value="$(arg hand_wrist_attach_max_distance_m)" />
+      <param name="hand_wrist_attach_max_distance_px" value="$(arg hand_wrist_attach_max_distance_px)" />
+      <param name="allow_hand_side_swap" value="$(arg allow_hand_side_swap)" />
+      <param name="temporal_confirm_frames" value="$(arg temporal_confirm_frames)" />
+      <param name="temporal_lost_frames" value="$(arg temporal_lost_frames)" />
+      <param name="temporal_max_jump_m" value="$(arg temporal_max_jump_m)" />
+      <param name="temporal_smoothing_alpha" value="$(arg temporal_smoothing_alpha)" />
+      <param name="enable_arm_spatial_filter" value="$(arg enable_arm_spatial_filter)" />
+      <param name="arm_median_window" value="$(arg arm_median_window)" />
+      <param name="arm_max_jump_m" value="$(arg arm_max_jump_m)" />
+      <param name="enable_arm_length_lock" value="$(arg enable_arm_length_lock)" />
+      <param name="arm_calib_frames" value="$(arg arm_calib_frames)" />
+      <param name="enable_hip_clamp" value="$(arg enable_hip_clamp)" />
+      <param name="hip_clamp_offset_m" value="$(arg hip_clamp_offset_m)" />
+      <param name="draw_person_mask" value="$(arg draw_person_mask)" />
+      <param name="draw_rejected_raw" value="$(arg draw_rejected_raw)" />
+      <param name="camera_reopen_timeout_s" value="8.0" />
+    </node>
+  </group>
+
+  <group ns="kinect_back">
+    <node pkg="ur3_hrc_planner"
+          type="kinect_skeleton_tracker.py"
+          name="kinect_skeleton_tracker"
+          required="false"
+          respawn="true"
+          respawn_delay="$(arg camera_respawn_delay_sec)"
+          launch-prefix="bash -c 'sleep 6; exec $0 $@'"
+          output="screen">
+      <param name="camera_name" value="$(arg back_camera_name)" />
+      <param name="camera_device_index" value="$(arg back_camera_device_index)" />
+      <param name="camera_serial" type="str" value="$(arg back_camera_serial)" />
+      <param name="camera_packet_pipeline" type="str" value="$(arg back_camera_packet_pipeline)" />
+      <param name="startup_delay_sec" value="$(arg back_camera_startup_delay_sec)" />
+      <param name="camera_frame" value="$(arg back_camera_frame)" />
+      <param name="target_frame" value="$(arg target_frame)" />
+      <param name="human_skeleton_camera_topic" value="$(arg back_skeleton_camera_topic)" />
+      <param name="human_skeleton_base_topic" value="$(arg back_skeleton_base_topic)" />
+      <param name="status_topic" value="$(arg back_skeleton_status_topic)" />
+      <param name="raw_image_topic" value="$(arg back_raw_image_topic)" />
+      <param name="debug_image_topic" value="$(arg back_debug_image_topic)" />
+      <param name="publish_static_tf" value="false" />
+      <param name="rate_hz" value="3" />
+      <param name="min_visibility" value="0.05" />
+      <param name="frame_timeout_ms" value="$(arg tracker_frame_timeout_ms)" />
+      <param name="rgb_only_mode" value="$(arg back_rgb_only_mode)" />
+      <param name="enable_depth" value="$(arg back_enable_depth)" />
+      <param name="reopen_on_frame_timeout" value="$(arg reopen_on_frame_timeout)" />
+      <param name="restart_process_on_frame_timeout" value="$(arg restart_process_on_frame_timeout)" />
+      <param name="frame_timeout_reopen_threshold" value="$(arg frame_timeout_reopen_threshold)" />
+      <param name="camera_reopen_backoff_sec" value="$(arg camera_reopen_backoff_sec)" />
+      <param name="status_interval_sec" value="1.0" />
+      <param name="debug_image_flip_horizontal" value="$(arg back_debug_image_flip_horizontal)" />
+      <param name="debug_image_flip_vertical" value="$(arg back_debug_image_flip_vertical)" />
+      <param name="enable_yolo_person_segmentation" value="false" />
+      <param name="yolo_model_path" value="$(arg yolo_model_path)" />
+      <param name="yolo_device" value="$(arg yolo_device)" />
+      <param name="yolo_conf_threshold" value="$(arg yolo_conf_threshold)" />
+      <param name="yolo_iou_threshold" value="$(arg yolo_iou_threshold)" />
+      <param name="person_mask_min_area_ratio" value="$(arg person_mask_min_area_ratio)" />
+      <param name="person_mask_dilate_px" value="$(arg person_mask_dilate_px)" />
+      <param name="require_person_mask_for_pose" value="false" />
+      <param name="require_person_mask_for_hands" value="false" />
+      <param name="enable_holistic" value="$(arg enable_holistic)" />
+      <param name="holistic_model_complexity" value="0" />
+      <param name="holistic_min_detection_confidence" value="$(arg holistic_min_detection_confidence)" />
+      <param name="holistic_min_tracking_confidence" value="$(arg holistic_min_tracking_confidence)" />
+      <param name="body_min_core_points" value="$(arg body_min_core_points)" />
+      <param name="shoulder_width_range" value="$(arg shoulder_width_range)" />
+      <param name="torso_length_range" value="$(arg torso_length_range)" />
+      <param name="enable_hand_detection" value="$(arg enable_hand_detection)" />
+      <param name="min_hand_valid_points" value="$(arg min_hand_valid_points)" />
+      <param name="hand_wrist_attach_max_distance_m" value="$(arg hand_wrist_attach_max_distance_m)" />
+      <param name="hand_wrist_attach_max_distance_px" value="$(arg hand_wrist_attach_max_distance_px)" />
+      <param name="allow_hand_side_swap" value="$(arg allow_hand_side_swap)" />
+      <param name="temporal_confirm_frames" value="$(arg temporal_confirm_frames)" />
+      <param name="temporal_lost_frames" value="$(arg temporal_lost_frames)" />
+      <param name="temporal_max_jump_m" value="$(arg temporal_max_jump_m)" />
+      <param name="temporal_smoothing_alpha" value="$(arg temporal_smoothing_alpha)" />
+      <param name="enable_arm_spatial_filter" value="$(arg enable_arm_spatial_filter)" />
+      <param name="arm_median_window" value="$(arg arm_median_window)" />
+      <param name="arm_max_jump_m" value="$(arg arm_max_jump_m)" />
+      <param name="enable_arm_length_lock" value="$(arg enable_arm_length_lock)" />
+      <param name="arm_calib_frames" value="$(arg arm_calib_frames)" />
+      <param name="enable_hip_clamp" value="$(arg enable_hip_clamp)" />
+      <param name="hip_clamp_offset_m" value="$(arg hip_clamp_offset_m)" />
+      <param name="draw_person_mask" value="$(arg draw_person_mask)" />
+      <param name="draw_rejected_raw" value="$(arg draw_rejected_raw)" />
+      <param name="camera_reopen_timeout_s" value="12.0" />
+      <param name="camera_init_delay_s" value="0.0" />
+    </node>
+  </group>
+
+  <node pkg="ur3_hrc_planner"
+        type="multi_kinect_skeleton_controller.py"
+        name="multi_kinect_skeleton_controller"
+        required="false"
+        output="screen">
+    <param name="target_frame" value="$(arg target_frame)" />
+    <param name="front_skeleton_base_topic" value="$(arg front_skeleton_base_topic)" />
+    <param name="back_skeleton_base_topic" value="$(arg back_skeleton_base_topic)" />
+    <param name="output_skeleton_base_topic" value="$(arg human_skeleton_base_topic)" />
+    <param name="fusion_status_topic" value="$(arg human_skeleton_fusion_status_topic)" />
+    <param name="fusion_debug_marker_topic" value="$(arg human_skeleton_fusion_marker_topic)" />
+    <param name="tracked_joint_ids" value="$(arg tracked_joint_ids)" />
+    <param name="fusion_rate_hz" value="$(arg fusion_rate_hz)" />
+    <param name="max_input_age_sec" value="$(arg max_input_age_sec)" />
+    <param name="sync_max_stamp_diff_sec" value="$(arg sync_max_stamp_diff_sec)" />
+    <param name="allow_single_camera_fallback" value="$(arg allow_single_camera_fallback)" />
+    <param name="empty_publish_on_no_input" value="$(arg empty_publish_on_no_input)" />
+    <param name="publish_source_markers" value="$(arg publish_source_markers)" />
+  </node>
+
+  <node pkg="ur3_hrc_planner"
+        type="skeleton_obstacle_builder.py"
+        name="skeleton_obstacle_builder"
+        required="false"
+        output="screen">
+    <param name="skeleton_topic" value="$(arg human_skeleton_base_topic)" />
+    <param name="collision_object_topic" value="$(arg human_collision_object_topic)" />
+    <param name="status_topic" value="$(arg human_obstacle_status_topic)" />
+    <param name="frame_id" value="$(arg target_frame)" />
+    <param name="object_id" value="$(arg object_id)" />
+    <param name="tracked_joint_ids" value="$(arg tracked_joint_ids)" />
+    <param name="connection_pairs" value="$(arg connection_pairs)" />
+    <param name="joint_radius" value="0.03" />
+    <param name="bone_radius" value="0.03" />
+    <param name="body_joint_radius" value="0.05" />
+    <param name="body_bone_radius" value="0.05" />
+    <param name="static_safety_padding" value="0.0" />
+    <param name="speed_padding_gain" value="0.0" />
+    <param name="speed_padding_deadband" value="0.05" />
+    <param name="max_dynamic_padding" value="0.0" />
+    <param name="padding_smoothing_alpha" value="0.70" />
+    <param name="max_reasonable_joint_speed" value="2.0" />
+    <param name="delta_threshold" value="0.02" />
+    <param name="heartbeat_interval_sec" value="0.20" />
+    <param name="min_bone_length" value="0.01" />
+    <param name="max_bone_length" value="0.90" />
+    <param name="min_valid_joints" value="1" />
+    <param name="timeout_remove_sec" value="0.50" />
+    <param name="status_interval_sec" value="1.0" />
+  </node>
+
+  <node pkg="ur3_hrc_planner"
+        type="moveit_scene_manager.py"
+        name="moveit_scene_manager"
+        required="false"
+        output="screen">
+    <param name="human_collision_object_topic" value="$(arg human_collision_object_topic)" />
+    <param name="moveit_scene_status_topic" value="$(arg moveit_scene_status_topic)" />
+    <param name="target_frame" value="$(arg target_frame)" />
+    <param name="object_id" value="$(arg object_id)" />
+    <param name="apply_planning_scene_service" value="$(arg apply_planning_scene_service)" />
+    <param name="get_planning_scene_service" value="$(arg get_planning_scene_service)" />
+    <param name="wait_for_service_timeout_sec" value="$(arg wait_for_service_timeout_sec)" />
+    <param name="remove_timeout_sec" value="$(arg scene_remove_timeout_sec)" />
+    <param name="status_interval_sec" value="$(arg scene_status_interval_sec)" />
+    <param name="max_collision_primitives" value="$(arg max_collision_primitives)" />
+    <param name="max_object_age_sec" value="$(arg max_object_age_sec)" />
+    <param name="enable_scene_confirmation" value="$(arg enable_scene_confirmation)" />
+    <param name="enable_acm_debug" value="$(arg enable_acm_debug)" />
+    <param name="allow_empty_add_object" value="$(arg allow_empty_add_object)" />
+    <param name="allowed_primitive_types" value="$(arg allowed_primitive_types)" />
+    <param name="min_apply_interval_sec" value="$(arg min_apply_interval_sec)" />
+    <param name="reject_bad_quaternion" value="$(arg reject_bad_quaternion)" />
+    <param name="remove_on_shutdown" value="$(arg remove_on_shutdown)" />
+  </node>
+
+  <node pkg="ur3_hrc_planner"
+        type="planner_ab_replan_node.py"
+        name="planner_ab_replan_node"
+        output="screen">
+    <param name="target_frame" value="$(arg target_frame)" />
+    <param name="auto_execute" value="$(arg auto_execute)" />
+    <param name="velocity_scale" value="0.07" />
+    <param name="acceleration_scale" value="0.07" />
+    <param name="move_group_wait_timeout" value="60.0" />
+    <param name="move_group_retry_period" value="2.0" />
+    <param name="fk_wait_timeout" value="60.0" />
+    <param name="cycles" value="100" />
+    <param name="loop" value="false" />
+    <param name="enable_astar_guard" value="true" />
+    <param name="human_timeout_sec" value="1.0" />
+    <param name="use_skeleton_obstacles" value="true" />
+    <param name="human_skeleton_topic" value="$(arg human_skeleton_base_topic)" />
+    <param name="human_skeleton_timeout_sec" value="0.5" />
+    <param name="enable_moveit_scene_sync" value="$(arg enable_moveit_scene_sync)" />
+    <param name="moveit_scene_status_topic" value="$(arg moveit_scene_status_topic)" />
+    <param name="require_moveit_scene_ready" value="$(arg require_moveit_scene_ready)" />
+    <param name="scene_status_timeout_sec" value="$(arg scene_status_timeout_sec)" />
+    <param name="scene_ready_keywords" value="$(arg scene_ready_keywords)" />
+    <param name="scene_removed_keywords" value="$(arg scene_removed_keywords)" />
+    <param name="use_legacy_human_point" value="$(arg use_legacy_human_point)" />
+    <param name="human_point_selection_mode" value="$(arg human_point_selection_mode)" />
+    <param name="max_human_points_for_astar" value="$(arg max_human_points_for_astar)" />
+    <param name="tracked_joint_ids" value="$(arg tracked_joint_ids)" />
+    <param name="selected_body_joint_ids" value="$(arg selected_body_joint_ids)" />
+    <param name="publish_split_planning_time" value="$(arg publish_split_planning_time)" />
+    <param name="replan_retry_period" value="0.5" />
+    <param name="max_replan_attempts" value="0" />
+    <param name="voxel_size" value="0.065" />
+    <param name="human_inflate_radius" value="0" />
+    <param name="human_safety_distance" value="0.15" />
+    <param name="robot_body_radius" value="0.05" />
+    <param name="human_body_radius" value="0.08" />
+    <param name="speed_safety_gain" value="0.00" />
+    <param name="max_speed_safety_margin" value="0.00" />
+    <param name="execution_speed_safety_margin" value="0.00" />
+    <param name="safety_link_names" value="shoulder_link,upper_arm_link,forearm_link,wrist_1_link,wrist_2_link,wrist_3_link,flange,tool0" />
+    <param name="ignore_human_points_near_robot_path" value="false" />
+    <param name="robot_path_false_positive_distance" value="0.0" />
+    <param name="robot_path_false_positive_filter_current_robot" value="false" />
+    <param name="trajectory_sample_step" value="1" />
+    <param name="execution_monitor_rate" value="20.0" />
+    <param name="resampled_waypoint_count" value="7" />
+    <param name="wait_after_waypoint" value="0.0" />
+    <param name="hand_waypoint_collision_radius" value="0.15" />
+    <param name="detour_z_offset" value="0.20" />
+    <param name="max_detour_attempts" value="5" />
+    <param name="detour_retry_period" value="0.5" />
+    <param name="detour_planning_time" value="0.75" />
+    <param name="detour_hold_poll_period" value="0.5" />
+    <param name="check_pause_sec" value="0.2" />
+    <param name="min_cartesian_fraction" value="0.90" />
+    <param name="ara_epsilon_start" value="3.0" />
+    <param name="ara_epsilon_final" value="1.0" />
+    <param name="ara_epsilon_decay" value="0.5" />
+    <param name="ara_max_time_ms" value="50.0" />
+    <param name="ara_max_steps" value="50000" />
+    <param name="max_astar_marker_voxels" value="500" />
+  </node>
+</launch>

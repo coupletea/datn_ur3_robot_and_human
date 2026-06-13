@@ -1,0 +1,39 @@
+# Project documentation and agent/editor metadata
+/docs/
+/PROJECT_STRUCTURE.md
+/AGENTS.md
+/CLAUDE.md
+/.claude/
+/.vscode/
+/.idea/
+
+# Tests and test-only launch files
+/test/
+/launch/*test*.launch
+
+# Runtime output
+/logs/
+*.log
+*.csv
+*.bag
+*.db3
+
+# Python caches and local environments
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Catkin and ROS build output
+/build/
+/devel/
+/install/
+/log/
+
+# Local temporary files
+.DS_Store
+*.swp
+*~
