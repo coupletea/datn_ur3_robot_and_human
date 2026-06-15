@@ -1,6 +1,5 @@
 # Project documentation and agent/editor metadata
-/docs/
-/PROJECT_STRUCTURE.md
+
 /AGENTS.md
 /CLAUDE.md
 /.claude/
