@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import os
 import sys
+import threading
 from typing import Dict, Iterable, List, Tuple
 
 import rospy
@@ -46,7 +47,7 @@ class SkeletonFuser:
 
     def __init__(self, tracked_joint_ids: Iterable[int], max_merge_dist: float) -> None:
         self.tracked_joint_ids = [int(j) for j in tracked_joint_ids]
-        self.max_merge_dist = float(max_merge_dist)
+        self.max_merge_dist = max(0.0, float(max_merge_dist))
 
     def fuse(self, front: Skeleton, back: Skeleton) -> Tuple[Skeleton, str]:
         fused: Skeleton = {}
@@ -116,7 +117,7 @@ class DutyScheduler:
             cmds["back"] = self.back_low_rate
             self._front_started = True
 
-        missing = self.total_tracked - int(front_valid_count)
+        missing = max(0, self.total_tracked - int(front_valid_count))
         occluded = missing >= self.miss_threshold
         self._miss_streak = self._miss_streak + 1 if occluded else 0
 
@@ -152,6 +153,12 @@ class DualKinectFusionController:
         self.back_rate_cmd_topic = rospy.get_param("~back_rate_cmd_topic", "/kinect_back/tracker_rate_cmd")
 
         self.fusion_rate_hz = float(rospy.get_param("~fusion_rate_hz", 20.0))
+        if self.fusion_rate_hz <= 0.0:
+            rospy.logwarn(
+                "dual_kinect_fusion_controller: fusion_rate_hz=%.3f invalid, using 20.0",
+                self.fusion_rate_hz,
+            )
+            self.fusion_rate_hz = 20.0
         self.max_input_age_sec = float(rospy.get_param("~max_input_age_sec", 0.35))
         self.empty_publish_on_no_input = bool(rospy.get_param("~empty_publish_on_no_input", True))
 
@@ -173,6 +180,7 @@ class DualKinectFusionController:
         self._front_time = None
         self._back_msg = None
         self._back_time = None
+        self._cache_lock = threading.Lock()
 
         self.output_pub = rospy.Publisher(self.output_topic, PoseArray, queue_size=1)
         self.status_pub = rospy.Publisher(self.status_topic, String, queue_size=10, latch=True)
@@ -191,12 +199,14 @@ class DualKinectFusionController:
         )
 
     def _on_front(self, msg) -> None:
-        self._front_msg = msg
-        self._front_time = rospy.Time.now()
+        with self._cache_lock:
+            self._front_msg = msg
+            self._front_time = rospy.Time.now()
 
     def _on_back(self, msg) -> None:
-        self._back_msg = msg
-        self._back_time = rospy.Time.now()
+        with self._cache_lock:
+            self._back_msg = msg
+            self._back_time = rospy.Time.now()
 
     def _fresh_skeleton(self, msg, stamp, now) -> Skeleton:
         if msg is None or stamp is None:
@@ -212,14 +222,33 @@ class DualKinectFusionController:
             self.back_rate_pub.publish(Float32(data=cmds["back"]))
 
     def on_timer(self, _event) -> None:
+        try:
+            self._fuse_and_publish()
+        except Exception as exc:  # never let one bad tick kill the rospy.Timer
+            rospy.logerr_throttle(
+                2.0, "dual_kinect_fusion_controller timer error: %s", exc
+            )
+
+    def _fuse_and_publish(self) -> None:
         now = rospy.Time.now()
-        front = self._fresh_skeleton(self._front_msg, self._front_time, now)
-        back = self._fresh_skeleton(self._back_msg, self._back_time, now)
+        with self._cache_lock:
+            front_msg, front_time = self._front_msg, self._front_time
+            back_msg, back_time = self._back_msg, self._back_time
+
+        front = self._fresh_skeleton(front_msg, front_time, now)
+        back = self._fresh_skeleton(back_msg, back_time, now)
 
         fused, mode = self.fuser.fuse(front, back)
-        if fused or self.empty_publish_on_no_input:
+        if fused:
             self.output_pub.publish(
                 skeleton_dict_to_pose_array(fused, self.target_frame, now, self.tracked_joint_ids)
+            )
+        elif self.empty_publish_on_no_input:
+            rospy.logwarn_throttle(
+                2.0, "dual_kinect_fusion_controller: no fresh skeleton from either camera; publishing empty"
+            )
+            self.output_pub.publish(
+                skeleton_dict_to_pose_array({}, self.target_frame, now, self.tracked_joint_ids)
             )
 
         cmds, back_state = self.scheduler.update(len(front), now.to_sec())
