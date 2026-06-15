@@ -25,36 +25,36 @@
 
 ### Task 1: Cubic obstacle padding
 
-- [ ] Write failing tests for radius formula, cube shape, clipping, and union.
-- [ ] Run `python -m unittest astar_simulation.tests.test_obstacle_padding -v`; verify missing-module failure.
-- [ ] Implement `padding_radius`, `cubic_padding`, and `padded_obstacle_union`.
-- [ ] Re-run padding tests; expect all pass.
+- [x] Write failing tests for radius formula, cube shape, clipping, and union.
+- [x] Run `python -m unittest astar_simulation.tests.test_obstacle_padding -v`; verify missing-module failure.
+- [x] Implement `padding_radius`, `cubic_padding`, and `padded_obstacle_union`.
+- [x] Re-run padding tests; expect all pass.
 
 ### Task 2: Simulation model
 
-- [ ] Write failing tests for start/goal validation, obstacle IDs, independent speeds, deletion, and padding-over-endpoint rejection.
-- [ ] Run model tests; verify missing-model failure.
-- [ ] Implement `Obstacle`, `SimulationModel`, and `SceneValidationError`.
-- [ ] Re-run model and padding tests; expect all pass.
+- [x] Write failing tests for start/goal validation, obstacle IDs, independent speeds, deletion, and padding-over-endpoint rejection.
+- [x] Run model tests; verify missing-model failure.
+- [x] Implement `Obstacle`, `SimulationModel`, and `SceneValidationError`.
+- [x] Re-run model and padding tests; expect all pass.
 
 ### Task 3: Production ARA* adapter
 
-- [ ] Write failing tests for direct production import, empty-scene path, detour/no-path behavior, and metrics passthrough.
-- [ ] Run adapter tests; verify missing-adapter failure.
-- [ ] Implement `PlannerAdapter` and `WAITING_FOR_START_GOAL`.
-- [ ] Re-run all pure tests; expect all pass.
+- [x] Write failing tests for direct production import, empty-scene path, detour/no-path behavior, and metrics passthrough.
+- [x] Run adapter tests; verify missing-adapter failure.
+- [x] Implement `PlannerAdapter` and `WAITING_FOR_START_GOAL`.
+- [x] Re-run all pure tests; expect all pass.
 
 ### Task 4: Desktop UI
 
-- [ ] Implement `AppWindow` with fixed 20-cube wireframe grid, side controls, active XY pick plane, numeric start/goal inputs, obstacle speed editing, delete/clear actions, auto-replan, and grouped PyVista actors.
-- [ ] Implement `main.py` with clear dependency error and Qt event loop.
-- [ ] Add desktop dependencies to `requirements.txt`.
-- [ ] Byte-compile all simulator modules.
+- [x] Implement `AppWindow` with fixed 20-cube wireframe grid, side controls, active XY pick plane, numeric start/goal inputs, obstacle speed editing, delete/clear actions, auto-replan, and grouped PyVista actors.
+- [x] Implement `main.py` with clear dependency error and Qt event loop.
+- [x] Add desktop dependencies to `requirements.txt`.
+- [x] Byte-compile all simulator modules.
 
 ### Task 5: Verification
 
-- [ ] Run `python -m unittest discover -s astar_simulation/tests -v`.
-- [ ] Run `python -m py_compile astar_simulation/*.py`.
-- [ ] Install desktop dependencies when compatible with the active Python runtime.
-- [ ] Run headless import/smoke checks for `app_window.py` and `main.py`.
-- [ ] Review diff against design spec and report any environment-only limitations.
+- [x] Run `python -m unittest discover -s astar_simulation/tests -v`.
+- [x] Run `python -m py_compile astar_simulation/*.py`.
+- [x] Install desktop dependencies when compatible with the active Python runtime.
+- [x] Run desktop import and live-launch smoke checks for `app_window.py` and `main.py`.
+- [x] Review diff against design spec and report any environment-only limitations.

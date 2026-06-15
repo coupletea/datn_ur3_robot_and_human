@@ -5,6 +5,7 @@
 /.claude/
 /.vscode/
 /.idea/
+/.superpowers/
 
 # Tests and test-only launch files
 /test/
