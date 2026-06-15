@@ -19,7 +19,7 @@ import tf2_ros
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PointStamped, PoseArray, TransformStamped
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 from tf.transformations import quaternion_from_euler
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -61,6 +61,11 @@ ARM_BONES = [
     ("pose_12", "pose_14"),
     ("pose_14", "pose_16"),
 ]
+
+
+def clamp_rate(value, rate_min: float, rate_max: float) -> float:
+    """Clamp a requested loop rate (Hz) into [rate_min, rate_max]."""
+    return max(float(rate_min), min(float(rate_max), float(value)))
 
 
 def _int_list_param(name: str, default: Iterable[int]) -> List[int]:
