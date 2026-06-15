@@ -16,6 +16,10 @@ from astar_simulation.simulation_model import (
 )
 
 
+def snap_coordinate(value: float, grid_max: int) -> int:
+    return max(0, min(grid_max, int(math.floor(float(value) + 0.5))))
+
+
 class AppWindow(QtWidgets.QMainWindow):
     MODE_SELECT = "Select"
     MODE_OBSTACLE = "Add Obstacle"
@@ -241,8 +245,8 @@ class AppWindow(QtWidgets.QMainWindow):
             self._show_error(str(exc))
 
     def _snap_to_voxel(self, point) -> Voxel:
-        x = max(0, min(self.grid_max, int(round(float(point[0])))))
-        y = max(0, min(self.grid_max, int(round(float(point[1])))))
+        x = snap_coordinate(point[0], self.grid_max)
+        y = snap_coordinate(point[1], self.grid_max)
         return (x, y, self.z_slider.value())
 
     def _select_nearest_obstacle(self, point) -> None:
