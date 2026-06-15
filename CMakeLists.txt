@@ -215,7 +215,7 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/planner_ab_replan_node.py
   scripts/kinect_skeleton_tracker.py
-  scripts/multi_kinect_skeleton_controller.py
+  scripts/dual_kinect_fusion_controller.py
   scripts/skeleton_obstacle_builder.py
   scripts/moveit_scene_manager.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
