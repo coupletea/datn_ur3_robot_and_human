@@ -11,8 +11,8 @@ Create a standalone desktop application for experimenting with the existing
 `scripts/astar_improved_3d.py` implementation.
 
 The simulator provides a rotatable 3D voxel grid. The user places the start,
-goal, and obstacles; assigns an independent speed to each obstacle; and observes
-how speed-dependent cubic padding changes the ARA* path.
+goal, and obstacles; assigns an independent speed to each obstacle; then presses
+`Start` to scan obstacles, plan, and animate a robot marker one voxel at a time.
 
 The application runs without ROS and does not modify or duplicate the ARA*
 implementation.
@@ -21,15 +21,18 @@ implementation.
 
 ### Included
 
-- Fixed `20 x 20 x 20` voxel planning grid.
+- Fixed `10 x 10 x 10` voxel planning grid.
 - PyVista/PyVistaQt desktop UI with rotate, zoom, and pan.
 - Start and goal placement by mouse or numeric coordinate input.
 - Obstacle placement by mouse.
 - One cubic voxel per base obstacle.
 - Independent speed value for every obstacle.
 - Cubic padding derived linearly from obstacle speed.
-- Automatic replanning after every relevant scene change.
-- Visualization of base obstacles, padding, start, goal, path, and planner metrics.
+- Explicit `Start` and `Stop` execution controls.
+- Sequential obstacle/padding scan animation before planning.
+- Six-direction ARA* path with no smoothing.
+- Robot-marker movement one voxel at a time.
+- Visualization of planned path and traveled path using different colors.
 - Focused tests for model, padding, and planner adapter logic.
 
 ### Excluded
@@ -82,9 +85,10 @@ The simulator must not copy or alter the algorithm source.
 
 Owns all editable simulation state without PyVista or Qt dependencies:
 
-- Grid size, fixed at `(20, 20, 20)`.
+- Grid size, fixed at `(10, 10, 10)`.
 - Optional start voxel.
 - Optional goal voxel.
+- Current robot voxel, initialized from start and preserved when stopped.
 - Obstacles keyed by stable integer ID.
 - Each obstacle stores its voxel coordinate and speed.
 - Global padding gain.
@@ -107,7 +111,7 @@ For a base obstacle at `(x, y, z)`, padding fills the clipped cubic region:
 ```
 
 where `p` is `padding_radius`. The base voxel is part of this cube. Voxels
-outside the `20 x 20 x 20` grid are discarded.
+outside the `10 x 10 x 10` grid are discarded.
 
 ### `planner_adapter.py`
 
@@ -119,8 +123,8 @@ outside the `20 x 20 x 20` grid are discarded.
 - Calls `plan_with_info(start, goal, padded_obstacles)`.
 - Returns the original `PlanResult` for visualization.
 
-The initial configuration uses diagonal movement and path smoothing. Existing
-algorithm defaults remain unchanged unless surfaced explicitly in the UI later.
+The adapter configures `diagonal=False` and `smooth=False`. Every path edge
+therefore changes exactly one axis by one voxel, matching the animation.
 
 ### `app_window.py`
 
@@ -129,9 +133,10 @@ padding rules.
 
 It:
 
-- Renders the grid, pick plane, scene objects, path, and metrics.
+- Renders the grid, pick plane, scene objects, paths, robot marker, and metrics.
 - Translates UI actions into model updates.
-- Calls the planner adapter after valid changes.
+- Runs a non-blocking Qt-timer state machine for scanning, planning, movement,
+  stopping, and finishing.
 - Refreshes only affected visual actors where practical.
 
 ## 5. Desktop UI
@@ -140,9 +145,9 @@ It:
 
 The main view displays a real 3D planning grid:
 
-- Grid extent: `0..19` on X, Y, and Z.
+- Grid extent: `0..9` on X, Y, and Z.
 - Whole grid rendered as lightweight wireframe/axes.
-- Empty voxels are not rendered as 8,000 solid cubes.
+- Empty voxels are not rendered as 1,000 solid cubes.
 - Left-drag rotates the camera.
 - Mouse wheel zooms.
 - Middle/right-drag pans according to PyVista controls.
@@ -156,6 +161,9 @@ Colors:
 | Base obstacle voxel | Red |
 | Padding-only voxels | Orange with transparency |
 | Planned path | Blue |
+| Traveled path | Green |
+| Robot marker | Cyan |
+| Active scan obstacle/padding | Yellow highlight |
 | Active XY pick plane | Yellow with transparency |
 
 ### Side Control Panel
@@ -163,11 +171,14 @@ Colors:
 Controls:
 
 - Edit mode: `Add Obstacle`, `Set Start`, `Set Goal`, `Select`.
-- Z slider selecting the active XY pick plane from `0` to `19`.
+- Z slider selecting the active XY pick plane from `0` to `9`.
 - Numeric `(x, y, z)` inputs and apply buttons for start and goal.
 - Selected-obstacle speed input/slider.
 - Global padding gain input.
 - `Delete Selected` and `Clear Obstacles`.
+- `Start` and `Stop` buttons.
+- Robot step-time slider from `0.1` to `2.0` seconds per voxel, default `0.5`.
+- Scan-time slider from `0.05` to `1.0` seconds per obstacle, default `0.2`.
 - Planner result panel showing:
   - success and reason;
   - planning time;
@@ -189,34 +200,60 @@ uses the active XY pick plane:
 In `Select` mode, clicking a rendered red base-obstacle voxel selects that
 obstacle for speed editing or deletion.
 
-## 6. Interaction and Replanning
+## 6. Start, Stop, and Animation Flow
 
-Every valid change automatically replans:
+Editing does not automatically call ARA*. Planning begins only when the user
+presses `Start`.
 
-- start changed;
-- goal changed;
-- obstacle added or deleted;
-- selected obstacle speed changed;
-- global padding gain changed.
-
-Replanning flow:
+The UI uses a non-blocking Qt timer state machine:
 
 ```text
-UI action
-  -> SimulationModel validates and updates state
-  -> obstacle_padding builds padded obstacle union
-  -> PlannerAdapter calls AStarImproved3D.plan_with_info()
-  -> AppWindow refreshes obstacle actors, path, and metrics
+EDITING
+  -> Start
+  -> SCANNING
+  -> PLANNING
+  -> MOVING
+  -> FINISHED
+
+MOVING
+  -> Stop
+  -> STOPPED
+  -> edit scene
+  -> Start
+  -> SCANNING
+  -> PLANNING from current robot voxel
 ```
 
-If start or goal is missing, the app updates visuals but reports
-`WAITING_FOR_START_GOAL` without calling ARA*.
+### Start
+
+1. Require start and goal.
+2. Initialize the robot marker from start if it has not moved before.
+3. Lock all scene-edit controls.
+4. Highlight each base obstacle and its padding in stable obstacle-ID order.
+5. Use the scan-time slider interval between highlights.
+6. Run ARA* from the current robot voxel to goal.
+7. If successful, draw the complete planned path in blue.
+8. Move the robot marker one voxel per robot-step interval.
+9. Extend a separate green traveled path after every movement step.
+10. Unlock editing when the robot reaches the goal.
+
+### Stop
+
+- `Stop` is enabled only while scanning or moving.
+- Stopping cancels the active timer and leaves the robot at its current voxel.
+- The current planned path remains visible for context.
+- Scene editing is unlocked.
+- The user may add, delete, or change obstacles and padding.
+- The next `Start` scans again and plans from the current robot voxel to goal.
+
+If ARA* cannot find a path, the robot does not move, the result reason is shown,
+and scene editing is unlocked.
 
 Speed is a static risk value only. Obstacles do not move.
 
 ## 7. Validation and Error Handling
 
-- Coordinates must be integer voxels inside `[0, 19]`.
+- Coordinates must be integer voxels inside `[0, 9]`.
 - Speeds and padding gain must be finite and non-negative.
 - Duplicate base-obstacle placement is rejected.
 - Start and goal cannot occupy the same voxel.
@@ -228,21 +265,20 @@ Speed is a static risk value only. Obstacles do not move.
 - Dependency/import failures produce a clear startup message.
 - Unexpected planning exceptions are caught at the UI boundary and shown in the
   result panel while preserving current scene state.
+- Scene editing controls are disabled during scanning, planning, and movement.
+- Stop never resets the robot to the original start.
 
 ## 8. Rendering Strategy
 
-Rendering must remain responsive on the `20 x 20 x 20` grid:
+Rendering must remain responsive on the `10 x 10 x 10` grid:
 
-- Render one lightweight grid/wireframe actor, not 8,000 empty cube actors.
+- Render one lightweight grid/wireframe actor, not 1,000 empty cube actors.
 - Group base obstacles into one mesh when possible.
 - Group padding-only voxels into one mesh.
-- Render the path as a polyline through voxel centers.
+- Render planned and traveled paths as separate polylines through voxel centers.
 - Render start and goal as distinct markers.
+- Render the robot as a distinct marker at its current voxel.
 - Keep base-obstacle actors pickable; padding actors are not selectable.
-
-Automatic replanning happens immediately after edits. UI rendering may debounce
-continuous speed/gain slider movement briefly so rapid slider events do not
-queue excessive planner calls.
 
 ## 9. Dependencies
 
@@ -282,6 +318,7 @@ The app uses PySide6 as the Qt binding. ROS packages are not required.
 - Padded wall causes detour or `NO_PATH`.
 - Speed/gain changes that would pad over start or goal are rejected.
 - Metrics are passed through unchanged.
+- Every path edge changes exactly one axis by one voxel.
 
 ### Manual UI checks
 
@@ -290,17 +327,25 @@ The app uses PySide6 as the Qt binding. ROS packages are not required.
 - Pick plane follows Z slider.
 - Click placement snaps to correct voxel.
 - Base obstacle selection edits only that obstacle's speed.
-- Path and metrics refresh automatically.
+- Start scans each obstacle/padding sequentially.
+- Planned path appears before movement begins.
+- Robot marker moves one voxel at a time and traveled path uses a different color.
+- Stop preserves current robot voxel and unlocks editing.
+- Next Start replans from the preserved robot voxel.
 
 ## 11. Success Criteria
 
 The feature is complete when a user can:
 
 1. Run `python astar_simulation/main.py` on Windows.
-2. Rotate and inspect a `20 x 20 x 20` 3D voxel grid.
+2. Rotate and inspect a `10 x 10 x 10` 3D voxel grid.
 3. Place or numerically enter start and goal.
 4. Click to add single-voxel obstacles.
 5. Select each obstacle and assign a separate static speed.
 6. Observe cubic speed-derived padding.
-7. See ARA* automatically find a new path around the padded obstacles.
-8. Read the algorithm result and metrics without using ROS.
+7. Press Start and see every obstacle/padding scanned before planning.
+8. See ARA* draw a six-direction path before movement.
+9. See the robot marker traverse each voxel and leave a differently colored
+   traveled path.
+10. Stop, edit obstacles, and continue from the robot's current voxel.
+11. Read the algorithm result and metrics without using ROS.
