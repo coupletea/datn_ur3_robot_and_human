@@ -1,7 +1,7 @@
 # ARA* Improved 3D Simulator
 
 Standalone Windows desktop app for testing `scripts/astar_improved_3d.py` on a
-rotatable `20 x 20 x 20` voxel grid.
+rotatable `10 x 10 x 10` voxel grid.
 
 ## Install
 
@@ -21,7 +21,13 @@ python astar_simulation/main.py
 - Use numeric controls to set start and goal exactly.
 - In `Select` mode, click a red base obstacle to edit its speed or delete it.
 - Cubic padding radius is `ceil(speed * gain)`.
-- Every valid change automatically replans with the production ARA* module.
+- Press `Start` to scan each obstacle/padding region, run ARA*, draw the full
+  planned path, then move the robot marker one voxel at a time.
+- Planning uses six directions only and disables path smoothing.
+- Press `Stop` to pause at the current robot voxel, edit obstacles, then press
+  `Start` to scan and plan again from that voxel.
+- Planned path is blue. Traveled path is green.
+- Robot and scan intervals have separate controls.
 
 ## Tests
 

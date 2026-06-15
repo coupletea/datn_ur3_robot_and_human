@@ -36,13 +36,14 @@ class PlannerAdapter:
             return PlanningOutcome(WAITING_FOR_START_GOAL, None)
         planner = AStarImproved3D(
             *model.grid_size,
-            diagonal=True,
+            diagonal=False,
             epsilon_start=self.epsilon_start,
             epsilon_final=self.epsilon_final,
             epsilon_decay=self.epsilon_decay,
             max_time_ms=self.max_time_ms,
             max_steps=self.max_steps,
-            smooth=True,
+            smooth=False,
         )
-        result = planner.plan_with_info(model.start, model.goal, model.padded_obstacles())
+        plan_start = model.current_robot if model.current_robot is not None else model.start
+        result = planner.plan_with_info(plan_start, model.goal, model.padded_obstacles())
         return PlanningOutcome(result.reason, result)

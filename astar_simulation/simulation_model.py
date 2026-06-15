@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Set, Tuple
 
 from astar_simulation.obstacle_padding import padded_obstacle_union
+from astar_simulation.obstacle_padding import cubic_padding, padding_radius
 
 Voxel = Tuple[int, int, int]
 GridSize = Tuple[int, int, int]
@@ -21,11 +22,19 @@ class Obstacle:
     speed: float = 0.0
 
 
+@dataclass(frozen=True)
+class ScanEntry:
+    obstacle_id: int
+    base_voxel: Voxel
+    padded_voxels: Set[Voxel]
+
+
 class SimulationModel:
-    def __init__(self, grid_size: GridSize = (20, 20, 20), padding_gain: float = 1.0):
+    def __init__(self, grid_size: GridSize = (10, 10, 10), padding_gain: float = 1.0):
         self.grid_size = grid_size
         self.start: Optional[Voxel] = None
         self.goal: Optional[Voxel] = None
+        self.current_robot: Optional[Voxel] = None
         self.obstacles: Dict[int, Obstacle] = {}
         self.padding_gain = self._valid_non_negative(padding_gain, "padding gain")
         self._next_obstacle_id = 1
@@ -67,6 +76,16 @@ class SimulationModel:
         except SceneValidationError:
             self.start = previous
             raise
+
+    def initialize_robot(self) -> Voxel:
+        if self.start is None:
+            raise SceneValidationError("start is required")
+        if self.current_robot is None:
+            self.current_robot = self.start
+        return self.current_robot
+
+    def move_robot(self, voxel: Voxel) -> None:
+        self.current_robot = self._validate_voxel(voxel)
 
     def set_goal(self, voxel: Voxel) -> None:
         previous = self.goal
@@ -129,3 +148,17 @@ class SimulationModel:
             gain=self.padding_gain,
             grid_size=self.grid_size,
         )
+
+    def scan_entries(self):
+        return [
+            ScanEntry(
+                obstacle_id=obstacle.obstacle_id,
+                base_voxel=obstacle.voxel,
+                padded_voxels=cubic_padding(
+                    obstacle.voxel,
+                    padding_radius(obstacle.speed, self.padding_gain),
+                    self.grid_size,
+                ),
+            )
+            for obstacle in sorted(self.obstacles.values(), key=lambda item: item.obstacle_id)
+        ]
