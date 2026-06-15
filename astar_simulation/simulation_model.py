@@ -87,6 +87,11 @@ class SimulationModel:
     def move_robot(self, voxel: Voxel) -> None:
         self.current_robot = self._validate_voxel(voxel)
 
+    def reset_robot_to_start(self) -> None:
+        if self.start is None:
+            raise SceneValidationError("start is required")
+        self.current_robot = self.start
+
     def set_goal(self, voxel: Voxel) -> None:
         previous = self.goal
         self.goal = self._validate_voxel(voxel)

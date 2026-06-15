@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 import pyvista as pv
@@ -8,6 +9,7 @@ from PySide6 import QtCore, QtWidgets
 from pyvistaqt import QtInteractor
 
 from astar_simulation.planner_adapter import PlannerAdapter, PlanningOutcome
+from astar_simulation.run_logger import RunLogger
 from astar_simulation.simulation_model import (
     ScanEntry,
     SceneValidationError,
@@ -49,6 +51,9 @@ class AppWindow(QtWidgets.QMainWindow):
         self._planned_path: List[Voxel] = []
         self._traveled_path: List[Voxel] = []
         self._move_index = 0
+        self._scenario_counter = 0
+        self._active_scenario_id = ""
+        self.run_logger = RunLogger(Path(__file__).resolve().parent / "logs" / "astar_runs.csv")
 
         self.plotter = QtInteractor(self)
         self.setCentralWidget(self.plotter.interactor)
@@ -66,6 +71,7 @@ class AppWindow(QtWidgets.QMainWindow):
             pickable_window=True,
             left_clicking=True,
         )
+        self.plotter.track_click_position(self._on_right_click, side="right")
         self._refresh_scene()
         self._show_status(self.STATE_EDITING)
 
@@ -75,8 +81,17 @@ class AppWindow(QtWidgets.QMainWindow):
 
     def _build_controls(self) -> None:
         dock = QtWidgets.QDockWidget("Controls", self)
+        dock.setMinimumWidth(330)
         panel = QtWidgets.QWidget()
+        panel.setStyleSheet(
+            "QGroupBox { font-weight: bold; margin-top: 8px; padding-top: 8px; }"
+            "QPushButton { min-height: 28px; }"
+            "QTreeWidget { alternate-background-color: #edf3f8; }"
+        )
         layout = QtWidgets.QVBoxLayout(panel)
+        title = QtWidgets.QLabel("ARA* 3D Experiment Controls")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        layout.addWidget(title)
 
         layout.addWidget(QtWidgets.QLabel("Edit mode"))
         self.mode_group = QtWidgets.QButtonGroup(self)
@@ -111,10 +126,16 @@ class AppWindow(QtWidgets.QMainWindow):
         self.speed_spin.valueChanged.connect(self._on_speed_changed)
         self.delete_button = QtWidgets.QPushButton("Delete Selected")
         self.delete_button.clicked.connect(self._delete_selected)
+        self.obstacle_list = QtWidgets.QTreeWidget()
+        self.obstacle_list.setHeaderLabels(["ID", "Voxel", "Speed"])
+        self.obstacle_list.setAlternatingRowColors(True)
+        self.obstacle_list.setMaximumHeight(150)
+        self.obstacle_list.itemSelectionChanged.connect(self._on_obstacle_list_selection)
         obstacle_layout.addRow("ID / voxel", self.selected_label)
         obstacle_layout.addRow("Speed", self.speed_spin)
+        obstacle_layout.addRow(self.obstacle_list)
         obstacle_layout.addRow(self.delete_button)
-        self._editable_widgets.extend((self.speed_spin, self.delete_button))
+        self._editable_widgets.extend((self.speed_spin, self.obstacle_list, self.delete_button))
         layout.addWidget(obstacle_box)
 
         self.gain_spin = QtWidgets.QDoubleSpinBox()
@@ -145,6 +166,13 @@ class AppWindow(QtWidgets.QMainWindow):
         self.scan_step_spin.setSuffix(" s/obstacle")
         timing_layout.addRow("Robot", self.robot_step_spin)
         timing_layout.addRow("Scan", self.scan_step_spin)
+        self.voxel_size_spin = QtWidgets.QDoubleSpinBox()
+        self.voxel_size_spin.setRange(0.001, 10.0)
+        self.voxel_size_spin.setDecimals(3)
+        self.voxel_size_spin.setSingleStep(0.01)
+        self.voxel_size_spin.setValue(0.05)
+        self.voxel_size_spin.setSuffix(" m")
+        timing_layout.addRow("Voxel size", self.voxel_size_spin)
         layout.addWidget(timing_box)
 
         button_row = QtWidgets.QHBoxLayout()
@@ -256,6 +284,19 @@ class AppWindow(QtWidgets.QMainWindow):
         selected = min(self.model.obstacles.values(), key=lambda item: math.dist(item.voxel, point))
         self.selected_obstacle_id = selected.obstacle_id if math.dist(selected.voxel, point) <= 1 else None
 
+    def _on_right_click(self, _position) -> None:
+        if self.state in (self.STATE_SCANNING, self.STATE_MOVING):
+            return
+        point = self.plotter.pick_click_position()
+        if point is None or not self.model.obstacles:
+            return
+        selected = min(self.model.obstacles.values(), key=lambda item: math.dist(item.voxel, point))
+        if math.dist(selected.voxel, point) <= 1.0:
+            self.model.delete_obstacle(selected.obstacle_id)
+            if self.selected_obstacle_id == selected.obstacle_id:
+                self.selected_obstacle_id = None
+            self._scene_changed()
+
     def _apply_start(self) -> None:
         self._apply_endpoint(self.start_inputs, self.model.set_start)
 
@@ -322,6 +363,8 @@ class AppWindow(QtWidgets.QMainWindow):
             return
         self._scan_entries = self.model.scan_entries()
         self._scan_index = 0
+        self._scenario_counter += 1
+        self._active_scenario_id = f"scenario_{self._scenario_counter:06d}"
         self._set_editing_enabled(False)
         self.state = self.STATE_SCANNING
         self._show_status(self.STATE_SCANNING)
@@ -360,6 +403,12 @@ class AppWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self._finish_without_motion(f"Planning error: {exc}")
             return
+        self.run_logger.log_plan(
+            self._active_scenario_id,
+            self.model,
+            outcome,
+            voxel_size_m=self.voxel_size_spin.value(),
+        )
         self._show_outcome(outcome)
         if outcome.result is None or not outcome.result.success:
             self._finish_without_motion(outcome.status)
@@ -376,6 +425,8 @@ class AppWindow(QtWidgets.QMainWindow):
     def _move_tick(self) -> None:
         if self._move_index >= len(self._planned_path):
             self.state = self.STATE_FINISHED
+            self.model.reset_robot_to_start()
+            self._render_robot()
             self._set_editing_enabled(True)
             self._show_status(self.STATE_FINISHED)
             return
@@ -400,6 +451,7 @@ class AppWindow(QtWidgets.QMainWindow):
         self._render_endpoint("goal", self.model.goal, "#b879ff")
         self._render_robot()
         self._sync_selected_controls()
+        self._sync_obstacle_list()
         self.plotter.render()
 
     def _render_pick_plane(self) -> None:
@@ -490,6 +542,31 @@ class AppWindow(QtWidgets.QMainWindow):
             self.delete_button.setEnabled(True)
             self.speed_spin.setValue(selected.speed)
         self._updating_controls = False
+
+    def _sync_obstacle_list(self) -> None:
+        selected_id = self.selected_obstacle_id
+        self.obstacle_list.blockSignals(True)
+        self.obstacle_list.clear()
+        selected_item = None
+        for obstacle in sorted(self.model.obstacles.values(), key=lambda item: item.obstacle_id):
+            item = QtWidgets.QTreeWidgetItem(
+                [str(obstacle.obstacle_id), str(obstacle.voxel), f"{obstacle.speed:.2f}"]
+            )
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, obstacle.obstacle_id)
+            self.obstacle_list.addTopLevelItem(item)
+            if obstacle.obstacle_id == selected_id:
+                selected_item = item
+        if selected_item is not None:
+            self.obstacle_list.setCurrentItem(selected_item)
+        self.obstacle_list.blockSignals(False)
+
+    def _on_obstacle_list_selection(self) -> None:
+        items = self.obstacle_list.selectedItems()
+        self.selected_obstacle_id = (
+            int(items[0].data(0, QtCore.Qt.ItemDataRole.UserRole)) if items else None
+        )
+        self._sync_selected_controls()
+        self.plotter.render()
 
     def _show_outcome(self, outcome: PlanningOutcome) -> None:
         if outcome.result is None:

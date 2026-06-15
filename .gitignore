@@ -13,6 +13,7 @@
 
 # Runtime output
 /logs/
+/astar_simulation/logs/*.csv
 *.log
 *.csv
 *.bag

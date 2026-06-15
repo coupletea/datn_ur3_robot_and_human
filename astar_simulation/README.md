@@ -28,6 +28,13 @@ python astar_simulation/main.py
   `Start` to scan and plan again from that voxel.
 - Planned path is blue. Traveled path is green.
 - Robot and scan intervals have separate controls.
+- When movement reaches the goal, the robot marker resets to the original start
+  while planned/traveled paths remain visible.
+- Delete one obstacle using the obstacle list and `Delete Selected`, or
+  right-click the red obstacle in the 3D view.
+- Every ARA* plan appends experiment metrics to
+  `astar_simulation/logs/astar_runs.csv`.
+- `voxel_size_m` controls conversion from path cost to `path_distance_m`.
 
 ## Tests
 

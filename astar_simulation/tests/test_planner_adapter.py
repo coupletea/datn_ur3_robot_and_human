@@ -22,6 +22,8 @@ class PlannerAdapterTest(unittest.TestCase):
         self.assertEqual(outcome.result.path[0], model.start)
         self.assertEqual(outcome.result.path[-1], model.goal)
         self.assertIn("expanded_steps", outcome.result.metrics)
+        self.assertGreaterEqual(outcome.result.metrics["first_solution_time_ms"], 0.0)
+        self.assertGreaterEqual(outcome.result.metrics["iterations"], 1)
         for first, second in zip(outcome.result.path, outcome.result.path[1:]):
             self.assertEqual(sum(abs(a - b) for a, b in zip(first, second)), 1)
 

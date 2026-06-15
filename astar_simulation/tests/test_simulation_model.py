@@ -63,6 +63,12 @@ class SimulationModelTest(unittest.TestCase):
         with self.assertRaises(SceneValidationError):
             self.model.move_robot((10, 1, 1))
 
+    def test_reset_robot_returns_to_original_start(self):
+        self.model.initialize_robot()
+        self.model.move_robot((2, 1, 1))
+        self.model.reset_robot_to_start()
+        self.assertEqual(self.model.current_robot, self.model.start)
+
 
 if __name__ == "__main__":
     unittest.main()
