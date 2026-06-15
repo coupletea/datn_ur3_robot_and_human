@@ -45,15 +45,12 @@
   <arg name="back_debug_image_topic" default="/kinect_back/kinect_skeleton/image_raw"/>
 
   <arg name="human_skeleton_base_topic" default="/human_skeleton_base"/>
-  <arg name="human_skeleton_fusion_status_topic" default="/human_skeleton_fusion_status"/>
-  <arg name="human_skeleton_fusion_marker_topic" default="/human_skeleton_fusion_markers"/>
   <arg name="human_collision_object_topic" default="/human_collision_object"/>
   <arg name="human_obstacle_status_topic" default="/human_obstacle_status"/>
   <arg name="moveit_scene_status_topic" default="/moveit_scene_status"/>
   <arg name="object_id" default="human_skeleton"/>
   <arg name="tracked_joint_ids"  value="0,11,12,13,14,15,16,23,24"/>
   <arg name="connection_pairs"   value="11,13;13,15;12,14;14,16;11,12;11,23;12,24;23,24"/>
-  <arg name="min_valid_joints"   value="3"/>
   <arg name="apply_planning_scene_service" default="/apply_planning_scene"/>
   <arg name="get_planning_scene_service" default="/get_planning_scene"/>
   <arg name="wait_for_service_timeout_sec" default="10.0"/>
@@ -79,7 +76,6 @@
   <arg name="selected_body_joint_ids" default="11,12,13,14,15,16,23,24"/>
   <arg name="publish_split_planning_time" default="true"/>
 
-  <arg name="enable_yolo_person_segmentation" default="false"/>
   <arg name="yolo_model_path" default="yolov8n-seg.pt"/>
   <arg name="yolo_device" default="cuda:0"/>
   <arg name="yolo_conf_threshold" default="0.05"/>
@@ -88,10 +84,8 @@
   <arg name="person_mask_dilate_px" default="80"/>
 
   <arg name="enable_holistic" default="true"/>
-  <arg name="holistic_model_complexity" default="0"/>
   <arg name="holistic_min_detection_confidence" default="0.05"/>
   <arg name="holistic_min_tracking_confidence" default="0.05"/>
-  <arg name="tracker_rate_hz" default="5"/>
   <arg name="tracker_frame_timeout_ms" default="3000"/>
   <arg name="reopen_on_frame_timeout" default="true"/>
   <arg name="restart_process_on_frame_timeout" default="true"/>
@@ -122,13 +116,6 @@
 
   <arg name="draw_person_mask" default="false"/>
   <arg name="draw_rejected_raw" default="false"/>
-
-  <arg name="fusion_rate_hz" default="30"/>
-  <arg name="max_input_age_sec" default="0.40"/>
-  <arg name="sync_max_stamp_diff_sec" default="0.25"/>
-  <arg name="allow_single_camera_fallback" default="true"/>
-  <arg name="empty_publish_on_no_input" default="true"/>
-  <arg name="publish_source_markers" default="false"/>
 
   <!-- Temporary eye-to-hand TF placeholders. Replace these with real calibration for each Kinect. -->
   <node pkg="tf"
@@ -221,6 +208,9 @@
       <param name="draw_person_mask" value="$(arg draw_person_mask)" />
       <param name="draw_rejected_raw" value="$(arg draw_rejected_raw)" />
       <param name="camera_reopen_timeout_s" value="8.0" />
+      <param name="rate_cmd_topic" value="/kinect_front/tracker_rate_cmd" />
+      <param name="rate_min" value="1.0" />
+      <param name="rate_max" value="12.0" />
     </node>
   </group>
 
@@ -294,27 +284,35 @@
       <param name="draw_rejected_raw" value="$(arg draw_rejected_raw)" />
       <param name="camera_reopen_timeout_s" value="12.0" />
       <param name="camera_init_delay_s" value="0.0" />
+      <param name="rate_cmd_topic" value="/kinect_back/tracker_rate_cmd" />
+      <param name="rate_min" value="1.0" />
+      <param name="rate_max" value="8.0" />
     </node>
   </group>
 
+  <!-- Fusion + duty-cycle controller: gộp skeleton 2 cam (occlusion-fill) thành
+       /human_skeleton_base, đồng thời điều khiển rate cam sau theo occlusion. -->
   <node pkg="ur3_hrc_planner"
-        type="multi_kinect_skeleton_controller.py"
-        name="multi_kinect_skeleton_controller"
+        type="dual_kinect_fusion_controller.py"
+        name="dual_kinect_fusion_controller"
         required="false"
         output="screen">
     <param name="target_frame" value="$(arg target_frame)" />
+    <param name="tracked_joint_ids" value="$(arg tracked_joint_ids)" />
     <param name="front_skeleton_base_topic" value="$(arg front_skeleton_base_topic)" />
     <param name="back_skeleton_base_topic" value="$(arg back_skeleton_base_topic)" />
     <param name="output_skeleton_base_topic" value="$(arg human_skeleton_base_topic)" />
-    <param name="fusion_status_topic" value="$(arg human_skeleton_fusion_status_topic)" />
-    <param name="fusion_debug_marker_topic" value="$(arg human_skeleton_fusion_marker_topic)" />
-    <param name="tracked_joint_ids" value="$(arg tracked_joint_ids)" />
-    <param name="fusion_rate_hz" value="$(arg fusion_rate_hz)" />
-    <param name="max_input_age_sec" value="$(arg max_input_age_sec)" />
-    <param name="sync_max_stamp_diff_sec" value="$(arg sync_max_stamp_diff_sec)" />
-    <param name="allow_single_camera_fallback" value="$(arg allow_single_camera_fallback)" />
-    <param name="empty_publish_on_no_input" value="$(arg empty_publish_on_no_input)" />
-    <param name="publish_source_markers" value="$(arg publish_source_markers)" />
+    <param name="front_rate_cmd_topic" value="/kinect_front/tracker_rate_cmd" />
+    <param name="back_rate_cmd_topic" value="/kinect_back/tracker_rate_cmd" />
+    <param name="fusion_rate_hz" value="20.0" />
+    <param name="max_input_age_sec" value="0.35" />
+    <param name="max_merge_dist" value="0.20" />
+    <param name="miss_threshold" value="2" />
+    <param name="confirm_frames" value="3" />
+    <param name="boost_hold_sec" value="1.5" />
+    <param name="front_high_rate" value="10.0" />
+    <param name="back_high_rate" value="6.0" />
+    <param name="back_low_rate" value="2.0" />
   </node>
 
   <node pkg="ur3_hrc_planner"
