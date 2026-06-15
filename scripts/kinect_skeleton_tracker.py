@@ -389,9 +389,17 @@ class KinectSkeletonTracker:
         self.rate_hz = float(rospy.get_param("~rate_hz", 30.0))
         self.rate_cmd_topic = str(rospy.get_param("~rate_cmd_topic", "")).strip()
         self.rate_min = float(rospy.get_param("~rate_min", 1.0))
-        self.rate_max = float(rospy.get_param("~rate_max", 15.0))
+        self.rate_max = float(rospy.get_param("~rate_max", 60.0))
         self._rate_lock = threading.Lock()
         self._target_rate_hz = clamp_rate(self.rate_hz, self.rate_min, self.rate_max)
+        if self._target_rate_hz < self.rate_hz:
+            rospy.logwarn(
+                "[%s] configured rate_hz=%.1f clamped to %.1f by rate_max=%.1f",
+                self.camera_name,
+                self.rate_hz,
+                self._target_rate_hz,
+                self.rate_max,
+            )
         self.frame_timeout_ms = int(rospy.get_param("~frame_timeout_ms", 1000))
         self.rgb_only_mode = _bool_param("~rgb_only_mode", False)
         self.enable_depth = _bool_param("~enable_depth", True)
@@ -1147,6 +1155,9 @@ class KinectSkeletonTracker:
             self.image_pub.publish(self.bridge.cv2_to_imgmsg(debug_image, encoding="bgr8"))
 
     def _on_rate_cmd(self, msg) -> None:
+        if not math.isfinite(float(msg.data)):
+            rospy.logwarn_throttle(5.0, "[%s] ignoring non-finite rate command", self.camera_name)
+            return
         new_rate = clamp_rate(msg.data, self.rate_min, self.rate_max)
         with self._rate_lock:
             changed = abs(new_rate - self._target_rate_hz) > 1e-6
@@ -1155,7 +1166,8 @@ class KinectSkeletonTracker:
             rospy.loginfo("[%s] tracker rate command -> %.2f Hz", self.camera_name, new_rate)
 
     def spin(self) -> None:
-        applied_rate_hz = self._target_rate_hz
+        with self._rate_lock:
+            applied_rate_hz = self._target_rate_hz
         rate = rospy.Rate(applied_rate_hz)
         while not rospy.is_shutdown():
             with self._rate_lock:
