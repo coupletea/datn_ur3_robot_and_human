@@ -14,8 +14,9 @@ The simulator provides a rotatable 3D voxel grid. The user places the start,
 goal, and obstacles; assigns an independent speed to each obstacle; then presses
 `Start` to scan obstacles, plan, and animate a robot marker one voxel at a time.
 
-The application runs without ROS and does not modify or duplicate the ARA*
-implementation.
+The application runs without ROS and imports the production ARA*
+implementation. The algorithm search behavior is not duplicated or changed;
+only result metrics are extended for experiment logging.
 
 ## 2. Scope
 
@@ -33,6 +34,9 @@ implementation.
 - Six-direction ARA* path with no smoothing.
 - Robot-marker movement one voxel at a time.
 - Visualization of planned path and traveled path using different colors.
+- Reset robot marker to the original start after reaching goal.
+- Append one CSV row immediately after every ARA* planning attempt.
+- Obstacle deletion through both list selection and right-click.
 - Focused tests for model, padding, and planner adapter logic.
 
 ### Excluded
@@ -42,7 +46,7 @@ implementation.
 - Moving obstacles or velocity vectors.
 - Executable packaging with PyInstaller.
 - Alternative grid sizes.
-- Editing `scripts/astar_improved_3d.py`.
+- Changing ARA* search behavior in `scripts/astar_improved_3d.py`.
 
 ## 3. Repository Structure
 
@@ -55,11 +59,13 @@ astar_simulation/
 ├── simulation_model.py
 ├── obstacle_padding.py
 ├── planner_adapter.py
+├── run_logger.py
 ├── requirements.txt
 └── tests/
     ├── test_obstacle_padding.py
     ├── test_simulation_model.py
-    └── test_planner_adapter.py
+    ├── test_planner_adapter.py
+    └── test_run_logger.py
 ```
 
 `planner_adapter.py` resolves the repository root from its own location, adds
@@ -70,7 +76,8 @@ directly:
 from scripts.astar_improved_3d import AStarImproved3D, PlanResult
 ```
 
-The simulator must not copy or alter the algorithm source.
+The simulator must not copy the algorithm source. Changes to the production
+algorithm are limited to adding result metrics without changing path behavior.
 
 ## 4. Architecture
 
@@ -137,6 +144,7 @@ It:
 - Translates UI actions into model updates.
 - Runs a non-blocking Qt-timer state machine for scanning, planning, movement,
   stopping, and finishing.
+- Writes planning results through a dedicated CSV logger.
 - Refreshes only affected visual actors where practical.
 
 ## 5. Desktop UI
@@ -176,9 +184,12 @@ Controls:
 - Selected-obstacle speed input/slider.
 - Global padding gain input.
 - `Delete Selected` and `Clear Obstacles`.
+- Obstacle list showing ID, voxel, and speed.
+- Right-click deletion of a picked base obstacle.
 - `Start` and `Stop` buttons.
 - Robot step-time slider from `0.1` to `2.0` seconds per voxel, default `0.5`.
 - Scan-time slider from `0.05` to `1.0` seconds per obstacle, default `0.2`.
+- `voxel_size_m` numeric input, default `0.05`.
 - Planner result panel showing:
   - success and reason;
   - planning time;
@@ -235,7 +246,9 @@ MOVING
 7. If successful, draw the complete planned path in blue.
 8. Move the robot marker one voxel per robot-step interval.
 9. Extend a separate green traveled path after every movement step.
-10. Unlock editing when the robot reaches the goal.
+10. When goal is reached, preserve both paths for inspection.
+11. Reset the robot marker to the original start voxel.
+12. Unlock editing.
 
 ### Stop
 
@@ -267,6 +280,7 @@ Speed is a static risk value only. Obstacles do not move.
   result panel while preserving current scene state.
 - Scene editing controls are disabled during scanning, planning, and movement.
 - Stop never resets the robot to the original start.
+- Finishing at the goal always resets the robot marker to the original start.
 
 ## 8. Rendering Strategy
 
@@ -292,7 +306,78 @@ PySide6
 
 The app uses PySide6 as the Qt binding. ROS packages are not required.
 
-## 10. Testing
+## 10. CSV Planning Log
+
+Immediately after every ARA* plan attempt, append one row to:
+
+```text
+astar_simulation/logs/astar_runs.csv
+```
+
+The logger creates the directory and CSV header when needed. `scenario_id`
+increments once per `Start` button press during the app session using
+`scenario_000001` format.
+
+CSV schema:
+
+```text
+timestamp,
+scenario_id,
+map_size_x,
+map_size_y,
+map_size_z,
+start_x,start_y,start_z,
+goal_x,goal_y,goal_z,
+obstacle_count,
+obstacle_density,
+success,
+reason,
+planning_time_ms,
+first_solution_time_ms,
+expanded_nodes,
+iterations,
+path_length,
+path_cost,
+path_distance_m,
+epsilon_start,
+epsilon_final,
+epsilon_satisfied,
+is_replan,
+changed_obstacle_count
+```
+
+Definitions:
+
+- `start_*` is the actual plan start: current robot voxel for a resumed run,
+  otherwise original start.
+- `obstacle_count` is the number of unique padded voxels passed to ARA*.
+- `obstacle_density = obstacle_count / 1000` for the fixed `10 x 10 x 10` map.
+- `path_distance_m = path_cost * voxel_size_m`.
+- `is_replan=true` only when plan start differs from original start after Stop.
+- `changed_obstacle_count` comes from the ARA* result metrics.
+- Failed plans are logged with available metrics and empty unavailable values.
+
+`scripts/astar_improved_3d.py` is extended to expose real:
+
+- `first_solution_time_ms`: elapsed time when the first valid path is found.
+- `iterations`: number of ARA* epsilon improvement iterations executed.
+
+## 11. Obstacle Editing
+
+The right-side panel is grouped into `Scene`, `Obstacle Editor`, `Run Controls`,
+and `Metrics`.
+
+The Obstacle Editor contains a list with one row per base obstacle. Selecting a
+row selects the corresponding 3D obstacle and enables editing/deletion.
+
+Deletion is available through:
+
+- Select list row, then click `Delete Selected`.
+- Right-click a rendered base-obstacle voxel.
+
+Both routes delete exactly one base obstacle by stable obstacle ID.
+
+## 12. Testing
 
 ### Padding tests
 
@@ -319,6 +404,15 @@ The app uses PySide6 as the Qt binding. ROS packages are not required.
 - Speed/gain changes that would pad over start or goal are rejected.
 - Metrics are passed through unchanged.
 - Every path edge changes exactly one axis by one voxel.
+- ARA* metrics include real first-solution time and iteration count.
+
+### Logger tests
+
+- Creates header once and appends rows.
+- Uses padded obstacle count and density.
+- Computes path distance from `voxel_size_m`.
+- Marks replan only when actual plan start differs from original start.
+- Logs success and failure attempts.
 
 ### Manual UI checks
 
@@ -332,8 +426,11 @@ The app uses PySide6 as the Qt binding. ROS packages are not required.
 - Robot marker moves one voxel at a time and traveled path uses a different color.
 - Stop preserves current robot voxel and unlocks editing.
 - Next Start replans from the preserved robot voxel.
+- Finish resets robot marker to original start while preserving displayed paths.
+- List deletion and right-click deletion each remove exactly one obstacle.
+- Every plan appends one CSV row.
 
-## 11. Success Criteria
+## 13. Success Criteria
 
 The feature is complete when a user can:
 
@@ -348,4 +445,7 @@ The feature is complete when a user can:
 9. See the robot marker traverse each voxel and leave a differently colored
    traveled path.
 10. Stop, edit obstacles, and continue from the robot's current voxel.
-11. Read the algorithm result and metrics without using ROS.
+11. Reach goal and see robot marker reset to original start.
+12. Delete one obstacle from the list or by right-click.
+13. Inspect complete plan metrics in `astar_simulation/logs/astar_runs.csv`.
+14. Read the algorithm result and metrics without using ROS.
