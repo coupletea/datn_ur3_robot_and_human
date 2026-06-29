@@ -5,6 +5,7 @@
 /.claude/
 /.vscode/
 /.idea/
+/.superpowers/
 
 # Tests and test-only launch files
 /test/
@@ -12,6 +13,7 @@
 
 # Runtime output
 /logs/
+/astar_simulation/logs/*.csv
 *.log
 *.csv
 *.bag

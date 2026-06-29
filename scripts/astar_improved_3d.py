@@ -93,6 +93,8 @@ class AStarImproved3D:
         self.last_elapsed_ms = 0.0
         self.last_changed_obstacle_count = 0
         self.last_ignored_obstacle_count = 0
+        self.last_first_solution_time_ms: Optional[float] = None
+        self.last_iterations = 0
 
     @staticmethod
     def _build_neighbor_offsets(diagonal: bool) -> List[Tuple[int, int, int]]:
@@ -464,6 +466,8 @@ class AStarImproved3D:
         self._obstacles = set(obstacles)
         self._previous_obstacles = set(obstacles)
         self._last_path = []
+        self.last_first_solution_time_ms = None
+        self.last_iterations = 0
 
         self._g[start] = 0.0
         self._parent[start] = None
@@ -503,8 +507,12 @@ class AStarImproved3D:
         total_expanded = 0
         best_path: List[Voxel] = []
         final_reason = NO_PATH
+        first_solution_time_ms: Optional[float] = None
+        iterations = 0
 
         while self._eps >= self.epsilon_final:
+            iterations += 1
+            self.last_iterations = iterations
             expanded, reason = self._improve_path(
                 start_time=start_time,
                 max_time_ms=max_time_ms,
@@ -519,6 +527,9 @@ class AStarImproved3D:
                     self._last_path = path
                     self._eps_satisfied = self._eps
                     final_reason = OK
+                    if first_solution_time_ms is None:
+                        first_solution_time_ms = (time.monotonic() - start_time) * 1000.0
+                        self.last_first_solution_time_ms = first_solution_time_ms
                 else:
                     final_reason = PATH_EXTRACTION_FAILED
 
@@ -550,6 +561,8 @@ class AStarImproved3D:
             if self._open_min_key() == INF and not best_path:
                 break
 
+        self.last_first_solution_time_ms = first_solution_time_ms
+        self.last_iterations = iterations
         if best_path:
             return best_path, True, OK, total_expanded
         return [], False, final_reason, total_expanded
@@ -588,6 +601,8 @@ class AStarImproved3D:
             "ignored_obstacle_count": ignored_obstacle_count,
             "raw_obstacle_count": raw_obstacle_count,
             "changed_obstacle_count": changed_obstacle_count,
+            "first_solution_time_ms": self.last_first_solution_time_ms,
+            "iterations": self.last_iterations,
             "start": start,
             "goal": goal,
             "grid_size": (self.size_x, self.size_y, self.size_z),
