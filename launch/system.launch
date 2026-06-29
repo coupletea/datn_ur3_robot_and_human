@@ -8,7 +8,7 @@
   <arg name="camera_frame" default="kinect_front_ir_optical_frame"/>
   <arg name="target_frame" default="base_link"/>
   <arg name="auto_execute" default="false"/>
-  <arg name="debug_image_flip_horizontal" default="false"/>
+  <arg name="debug_image_flip_horizontal" default="true"/>
   <arg name="debug_image_flip_vertical" default="false"/>
   <arg name="human_skeleton_camera_topic" default="/human_skeleton_camera"/>
   <arg name="human_skeleton_base_topic" default="/human_skeleton_base"/>
@@ -88,12 +88,12 @@
   <node pkg="tf"
         type="static_transform_publisher"
         name="base_to_kinect_link"
-        args="0.87 0.01 1.59 1.5708 0.0 -0.785 $(arg target_frame) kinect_front_link 100" />
+        args="0.87 0.01 1.59 1.5708 0.0 -0.775 $(arg target_frame) kinect_front_link 100" />
 
   <node pkg="tf"
         type="static_transform_publisher"
         name="base_to_kinect_ir_optical"
-        args="0.87 0.01 1.59 1.5708 0.0 -0.785 $(arg target_frame) $(arg camera_frame) 100" />
+        args="0.87 0.01 1.59 1.5708 0.0 -0.775 $(arg target_frame) $(arg camera_frame) 100" />
 
   <node pkg="ur3_hrc_planner"
         type="kinect_skeleton_tracker.py"
@@ -226,8 +226,8 @@
     <param name="auto_execute" value="$(arg auto_execute)" />
     <param name="velocity_scale" value="0.1" />
     <param name="acceleration_scale" value="0.6" />
-    <param name="planning_time" value="2.5" />
-    <param name="planning_attempts" value="5" />
+    <param name="planning_time" value="1.0" />
+    <param name="planning_attempts" value="1" />
     <param name="move_group_wait_timeout" value="60.0" />
     <param name="move_group_retry_period" value="2.0" />
     <param name="fk_wait_timeout" value="60.0" />
@@ -252,7 +252,7 @@
     <param name="selected_body_joint_ids" value="$(arg selected_body_joint_ids)" />
     <param name="publish_split_planning_time" value="$(arg publish_split_planning_time)" />
     <param name="replan_retry_period" value="0.2" />
-    <param name="max_replan_attempts" value="0" />
+    <param name="max_replan_attempts" value="10" />
     <param name="voxel_size" value="0.04" />
     <param name="human_inflate_radius" value="1" />
     <param name="bone_inflate_radius" value="0" />
@@ -283,6 +283,13 @@
     <param name="ara_epsilon_decay" value="0.5" />
     <param name="ara_max_time_ms" value="50.0" />
     <param name="ara_max_steps" value="50000" />
+
+    <!-- Guard planner selection: ara_star (AStarImproved3D) | lpa_star (LPAStar3D incremental repair). Shares ara_max_time_ms/ara_max_steps budget. -->
+    <param name="guard_planner_type" value="lpa_star" />
+    <param name="lpa_epsilon" value="1.0" />
+    <param name="lpa_start_reuse_radius_voxels" value="1" />
+    <param name="lpa_max_changed_obstacles_for_repair" value="500" />
+
     <param name="max_astar_marker_voxels" value="500" />
   </node>
 </launch>

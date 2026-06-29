@@ -14,7 +14,12 @@ import rospy
 import moveit_commander
 from geometry_msgs.msg import Point, PointStamped, Pose, PoseArray, PoseStamped
 from moveit_msgs.msg import Constraints, JointConstraint
-from moveit_msgs.srv import GetPositionFK, GetPositionFKRequest
+from moveit_msgs.srv import (
+    GetPositionFK,
+    GetPositionFKRequest,
+    GetStateValidity,
+    GetStateValidityRequest,
+)
 from moveit_commander import MoveGroupCommander, RobotCommander
 from sensor_msgs.msg import JointState
 from std_msgs.msg import ColorRGBA, Float32, String
@@ -26,6 +31,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 from astar_improved_3d import AStarImproved3D, PlanResult
+from astar_lpa_3d import LPAStar3D
 from data_skeleton import pose_array_to_numeric_joint_dict
 
 
@@ -119,6 +125,42 @@ def _ros_now() -> rospy.Time:
         return rospy.Time.now()
     except rospy.ROSInitException:
         return rospy.Time(0)
+
+
+def speed_padding_meters(
+    speed_mps: float,
+    deadband_mps: float,
+    gain: float,
+    max_padding_m: float,
+) -> float:
+    """Extra obstacle clearance (metres) from robot speed.
+
+    Zero below the deadband, linear in (speed - deadband) by ``gain``, capped at
+    ``max_padding_m``. ``gain<=0`` or ``max_padding_m<=0`` disables it. Pure
+    function so it can be unit-checked without ROS (see ``--selftest``)."""
+    if gain <= 0.0 or max_padding_m <= 0.0:
+        return 0.0
+    over = speed_mps - deadband_mps
+    if over <= 0.0:
+        return 0.0
+    return min(max_padding_m, gain * over)
+
+
+def should_escalate_to_detour(
+    hand_blocks: bool,
+    goal_in_collision: Optional[bool],
+) -> bool:
+    """Decide whether a blocked waypoint should escalate to detour/hold.
+
+    Escalate when the human hand blocks the waypoint OR the goal joint state is
+    known to be in collision (OMPL would otherwise reject it in ~tens of ms and
+    the node would busy-retry forever). Unknown validity (``None``, e.g. the
+    ``check_state_validity`` service is unavailable) never escalates on its own,
+    so behaviour is unchanged when the service is missing. Pure function so it
+    can be unit-checked without ROS (see ``--selftest``)."""
+    if hand_blocks:
+        return True
+    return goal_in_collision is True
 
 
 class PlanLogger:
@@ -480,6 +522,40 @@ class UR3FixedJointABNode:
         self.ara_max_time_ms = float(rospy.get_param("~ara_max_time_ms", 50.0))
         self.ara_max_steps = max(1, int(rospy.get_param("~ara_max_steps", 50000)))
 
+        # TCP voxel guard planner selection. "ara_star" (default) = AStarImproved3D,
+        # unchanged. "lpa_star" = LPAStar3D incremental repair (drop-in API). LPA*
+        # shares the ARA* time/step budget (ara_max_time_ms / ara_max_steps).
+        self.guard_planner_type = str(rospy.get_param("~guard_planner_type", "ara_star"))
+        self.lpa_epsilon = float(rospy.get_param("~lpa_epsilon", 1.0))
+        self.lpa_start_reuse_radius_voxels = int(
+            rospy.get_param("~lpa_start_reuse_radius_voxels", 1)
+        )
+        self.lpa_max_changed_obstacles_for_repair = int(
+            rospy.get_param("~lpa_max_changed_obstacles_for_repair", 500)
+        )
+
+        # Speed-scaled A* obstacle padding: when the robot moves fast, inflate the
+        # A* human voxels by extra clearance so the planner reroutes wider. Padding
+        # is measured from live TCP speed during execution. Default gain=0 keeps
+        # current behavior (padding always 0). Tune on hardware (calibration knob).
+        self.astar_speed_padding_gain = max(
+            0.0, float(rospy.get_param("~astar_speed_padding_gain", 0.0))
+        )
+        self.astar_speed_padding_deadband_mps = max(
+            0.0, float(rospy.get_param("~astar_speed_padding_deadband_mps", 0.05))
+        )
+        self.astar_max_speed_padding_m = max(
+            0.0, float(rospy.get_param("~astar_max_speed_padding_m", 0.05))
+        )
+        self.astar_speed_padding_smoothing_alpha = min(
+            1.0, max(0.0, float(rospy.get_param("~astar_speed_padding_smoothing_alpha", 0.7)))
+        )
+        # In-motion A* re-check period. <=0 disables the re-check (padding still
+        # inflates obstacles, just no mid-segment reroute trigger).
+        self.astar_recheck_period_sec = max(
+            0.0, float(rospy.get_param("~astar_recheck_period_sec", 0.2))
+        )
+
         # False-positive filter for points detected on the robot itself or on
         # the planned robot path. This is separate from human safety distance.
         # If a camera point lies within this small band, treat it as robot
@@ -554,19 +630,44 @@ class UR3FixedJointABNode:
         self.map_size_x = max(1, int(round((self.map_x_max - self.map_x_min) / self.voxel_size)) + 1)
         self.map_size_y = max(1, int(round((self.map_y_max - self.map_y_min) / self.voxel_size)) + 1)
         self.map_size_z = max(1, int(round((self.map_z_max - self.map_z_min) / self.voxel_size)) + 1)
-        self.astar = AStarImproved3D(
-            size_x=self.map_size_x,
-            size_y=self.map_size_y,
-            size_z=self.map_size_z,
-            diagonal=True,
-            epsilon_start=self.ara_epsilon_start,
-            epsilon_final=self.ara_epsilon_final,
-            epsilon_decay=self.ara_epsilon_decay,
-            max_time_ms=self.ara_max_time_ms,
-            max_steps=self.ara_max_steps,
-        )
+        if self.guard_planner_type == "lpa_star":
+            # Drop-in: same plan_with_info/replan_with_info/set_penalty_cells API.
+            self.astar = LPAStar3D(
+                size_x=self.map_size_x,
+                size_y=self.map_size_y,
+                size_z=self.map_size_z,
+                diagonal=True,
+                max_time_ms=self.ara_max_time_ms,
+                max_steps=self.ara_max_steps,
+                epsilon=self.lpa_epsilon,
+                start_reuse_radius_voxels=self.lpa_start_reuse_radius_voxels,
+                max_changed_obstacles_for_repair=self.lpa_max_changed_obstacles_for_repair,
+            )
+        else:
+            self.astar = AStarImproved3D(
+                size_x=self.map_size_x,
+                size_y=self.map_size_y,
+                size_z=self.map_size_z,
+                diagonal=True,
+                epsilon_start=self.ara_epsilon_start,
+                epsilon_final=self.ara_epsilon_final,
+                epsilon_decay=self.ara_epsilon_decay,
+                max_time_ms=self.ara_max_time_ms,
+                max_steps=self.ara_max_steps,
+            )
         self._astar_last_goal: Optional[Voxel] = None
         self._first_plan_done: bool = False
+
+        # Speed-scaled padding state. Live value tracked during execution; the
+        # latch carries the in-motion padding into the next waypoint's plan
+        # (robot is at rest there, so live speed would otherwise read ~0).
+        self._current_tcp_speed: float = 0.0
+        self._speed_pad_voxels_live: int = 0
+        self._reroute_pad_voxels: int = 0
+        self._prev_tcp_pos: Optional[Tuple[float, float, float]] = None
+        self._prev_tcp_time: Optional[float] = None
+        self._exec_goal_voxel: Optional[Voxel] = None
+        self._last_exec_recheck: float = 0.0
 
         self.last_human_point: Optional[PointStamped] = None
         self.latest_skeleton_by_id: Dict[int, Point] = {}
@@ -620,11 +721,40 @@ class UR3FixedJointABNode:
                     f"A* guard will rely on MoveIt collision replanning only: {exc}"
                 )
 
+        # State-validity service: lets the node detect a goal joint state that is
+        # itself in collision (OMPL rejects it in ~tens of ms and the replan loop
+        # would otherwise spin forever). Optional: if unavailable the node keeps
+        # its previous behaviour (see should_escalate_to_detour / None handling).
+        self.state_validity_service_name = rospy.get_param(
+            "~state_validity_service", "/check_state_validity"
+        )
+        self.state_validity_client: Optional[rospy.ServiceProxy] = None
+        try:
+            rospy.wait_for_service(
+                self.state_validity_service_name, timeout=self.fk_wait_timeout
+            )
+            self.state_validity_client = rospy.ServiceProxy(
+                self.state_validity_service_name, GetStateValidity
+            )
+        except rospy.ROSException as exc:
+            rospy.logwarn(
+                f"State-validity service {self.state_validity_service_name} is not "
+                f"available; goal-collision escalation disabled: {exc}"
+            )
+
         rospy.loginfo(f"Planning group: {self.group_name}")
         rospy.loginfo(f"Active joints: {self.active_joints}")
+        rospy.loginfo(
+            "goal-collision escalation = %s (service %s)"
+            % (
+                "on" if self.state_validity_client is not None else "off",
+                self.state_validity_service_name,
+            )
+        )
         rospy.loginfo(f"target_frame = {self.target_frame}")
         rospy.loginfo(f"auto_execute = {self.auto_execute}")
         rospy.loginfo(f"enable_astar_guard = {self.enable_astar_guard}")
+        rospy.loginfo(f"guard_planner_type = {self.guard_planner_type}")
         rospy.loginfo(f"human_topic = {self.human_topic}")
         rospy.loginfo(f"use_skeleton_obstacles = {self.use_skeleton_obstacles}")
         rospy.loginfo(f"human_skeleton_topic = {self.human_skeleton_topic}")
@@ -1530,10 +1660,13 @@ class UR3FixedJointABNode:
         return voxels
 
     def active_human_voxels(self) -> set[Voxel]:
+        # Speed term: live padding (during motion) or the latched in-motion value
+        # carried into the next waypoint's rest-replan, whichever is larger.
+        speed_pad = max(self._speed_pad_voxels_live, self._reroute_pad_voxels)
         radius = max(
             self.human_inflate_radius,
             int(math.ceil(self.base_clearance() / self.voxel_size)),
-        )
+        ) + speed_pad
         voxels: set[Voxel] = set()
 
         for point in self.stable_human_points():
@@ -1555,6 +1688,65 @@ class UR3FixedJointABNode:
             pose.position.y,
             pose.position.z,
         )
+
+    def _speed_padding_voxels(self, speed_mps: float) -> int:
+        pad_m = speed_padding_meters(
+            speed_mps,
+            self.astar_speed_padding_deadband_mps,
+            self.astar_speed_padding_gain,
+            self.astar_max_speed_padding_m,
+        )
+        if pad_m <= 0.0:
+            return 0
+        return int(math.ceil(pad_m / self.voxel_size))
+
+    def _update_tcp_speed(self, now_t: float) -> None:
+        """Sample TCP speed from successive end-effector position deltas, EMA
+        smooth it, and refresh the live speed-padding voxel count. Cheap; called
+        each execution-monitor tick. Produces 0 padding when the feature is off."""
+        try:
+            pos = self.group.get_current_pose(self.end_effector_link).pose.position
+        except Exception as exc:
+            rospy.logwarn_throttle(5.0, "TCP speed sample failed: %s", exc)
+            return
+        cur = (pos.x, pos.y, pos.z)
+        if self._prev_tcp_pos is not None and self._prev_tcp_time is not None:
+            dt = now_t - self._prev_tcp_time
+            if dt > 1e-6:
+                raw = math.sqrt(
+                    (cur[0] - self._prev_tcp_pos[0]) ** 2
+                    + (cur[1] - self._prev_tcp_pos[1]) ** 2
+                    + (cur[2] - self._prev_tcp_pos[2]) ** 2
+                ) / dt
+                alpha = self.astar_speed_padding_smoothing_alpha
+                self._current_tcp_speed = (
+                    alpha * self._current_tcp_speed + (1.0 - alpha) * raw
+                )
+        self._prev_tcp_pos = cur
+        self._prev_tcp_time = now_t
+        self._speed_pad_voxels_live = self._speed_padding_voxels(self._current_tcp_speed)
+
+    def _exec_route_blocked(self) -> bool:
+        """In-motion A* re-check: is the route from the current TCP to the active
+        segment goal blocked by the (speed-inflated) human obstacles? Uses a full
+        fresh plan and resets the guard's incremental state so the next plan-time
+        guard call re-plans cleanly."""
+        if self._exec_goal_voxel is None:
+            return False
+        start_v = self.current_tcp_voxel()
+        goal_v = self._exec_goal_voxel
+        if start_v == goal_v:
+            return False
+        obstacles = self.active_human_voxels()
+        obstacles.discard(start_v)
+        obstacles.discard(goal_v)
+        result = self.astar.plan_with_info(
+            start_v, goal_v, obstacles, max_steps=self.ara_max_steps
+        )
+        # Re-check disturbs astar incremental state; force a fresh guard plan next.
+        self._astar_last_goal = None
+        self._first_plan_done = False
+        return not result.path
 
     def _record_breadcrumb_if_due(self) -> None:
         """Sample current joint config + TCP into the breadcrumb cache, at most
@@ -1683,6 +1875,56 @@ class UR3FixedJointABNode:
             return True
 
         return False
+
+    def goal_state_in_collision(self, joint_map: JointMap) -> Optional[bool]:
+        """True if the goal joint state is in collision per MoveIt's
+        check_state_validity, False if valid, None if the check is unavailable.
+
+        OMPL rejects an in-collision goal almost instantly, so without this the
+        replan loop would keep calling plan() forever on a guaranteed-invalid
+        target while the A* guard still reports a free TCP path."""
+        if self.state_validity_client is None:
+            return None
+
+        robot_state = self.robot.get_current_state()
+        joint_values = self.joint_map_to_group_order(joint_map)
+
+        joint_state = JointState()
+        joint_state.header.stamp = rospy.Time.now()
+        joint_state.name = list(robot_state.joint_state.name)
+        joint_state.position = list(robot_state.joint_state.position)
+
+        position_by_name = dict(zip(joint_state.name, joint_state.position))
+        for joint_name, joint_value in zip(self.active_joints, joint_values):
+            position_by_name[joint_name] = joint_value
+        joint_state.position = [position_by_name[name] for name in joint_state.name]
+        robot_state.joint_state = joint_state
+
+        request = GetStateValidityRequest()
+        request.robot_state = robot_state
+        request.group_name = self.group_name
+
+        try:
+            response = self.state_validity_client(request)
+        except rospy.ServiceException as exc:
+            rospy.logwarn_throttle(2.0, f"check_state_validity failed: {exc}")
+            return None
+
+        return not response.valid
+
+    def waypoint_obstructed(
+        self,
+        joint_map: JointMap,
+        target_pose: Optional[PoseStamped],
+    ) -> bool:
+        """Combined detour gate: hand near the waypoint OR goal state in
+        collision. Agrees with what OMPL actually rejects (see B+C fix)."""
+        hand_blocks = (
+            target_pose is not None and self.hand_blocks_target_pose(target_pose)
+        )
+        return should_escalate_to_detour(
+            hand_blocks, self.goal_state_in_collision(joint_map)
+        )
 
     def make_upward_detour_pose(self, target_pose: PoseStamped) -> PoseStamped:
         detour = PoseStamped()
@@ -2364,7 +2606,12 @@ class UR3FixedJointABNode:
         )
         return False
 
-    def hold_until_waypoint_clear(self, target_pose: PoseStamped, index: int) -> bool:
+    def hold_until_waypoint_clear(
+        self,
+        joint_map: JointMap,
+        target_pose: PoseStamped,
+        index: int,
+    ) -> bool:
         self.status_pub.publish(
             f"DETOUR_HOLD waypoint={index} attempts={self.max_detour_attempts}"
         )
@@ -2374,7 +2621,7 @@ class UR3FixedJointABNode:
         )
 
         while not rospy.is_shutdown():
-            if not self.hand_blocks_target_pose(target_pose):
+            if not self.waypoint_obstructed(joint_map, target_pose):
                 self.status_pub.publish(f"DETOUR_HOLD_CLEAR waypoint={index}")
                 rospy.loginfo(f"Waypoint {index} clear. Resuming normal waypoint planning.")
                 return True
@@ -2388,7 +2635,7 @@ class UR3FixedJointABNode:
             return True
 
         rospy.sleep(self.check_pause_sec)
-        if not self.hand_blocks_target_pose(target_pose):
+        if not self.waypoint_obstructed(joint_map, target_pose):
             return True
 
         detour_pose = self.make_upward_detour_pose(target_pose)
@@ -2405,9 +2652,9 @@ class UR3FixedJointABNode:
         ):
             return True
 
-        return self.hold_until_waypoint_clear(target_pose, index)
+        return self.hold_until_waypoint_clear(joint_map, target_pose, index)
 
-    def execute_plan(self, plan) -> bool:
+    def execute_plan(self, plan, goal_voxel: Optional[Voxel] = None) -> bool:
         if not self.auto_execute:
             rospy.loginfo("auto_execute is False, only planning.")
             self.status_pub.publish("PLAN_ONLY_SUCCESS")
@@ -2418,6 +2665,17 @@ class UR3FixedJointABNode:
                 detail="plan ok, execution disabled by config",
             )
             return True
+
+        # New segment motion starts: live speed governs again and any reroute
+        # latch from the previous segment has already been consumed by the plan
+        # that produced this trajectory, so clear it.
+        self._exec_goal_voxel = goal_voxel
+        self._reroute_pad_voxels = 0
+        self._speed_pad_voxels_live = 0
+        self._current_tcp_speed = 0.0
+        self._prev_tcp_pos = None
+        self._prev_tcp_time = None
+        self._last_exec_recheck = 0.0
 
         started = time.time()
         ok = self.group.execute(plan, wait=False)
@@ -2431,6 +2689,8 @@ class UR3FixedJointABNode:
                 reason="moveit_execute_returned_false",
                 n_human=len(self.latest_human_points()),
             )
+            self._speed_pad_voxels_live = 0
+            self._exec_goal_voxel = None
             return False
 
         trajectory = plan.joint_trajectory
@@ -2443,6 +2703,9 @@ class UR3FixedJointABNode:
         min_distance = float("inf")
 
         while not rospy.is_shutdown() and rospy.Time.now() < deadline:
+            now_t = time.time()
+            self._update_tcp_speed(now_t)
+
             distance_result = self.current_robot_hand_min_distance()
             if distance_result is not None:
                 distance, link_name = distance_result
@@ -2469,12 +2732,50 @@ class UR3FixedJointABNode:
                         min_dist=distance,
                         detail="emergency stop during execution",
                     )
+                    self._speed_pad_voxels_live = 0
+                    self._exec_goal_voxel = None
                     return False
+
+            # Tier 1: in-motion A* re-check. Only when speed padding is active and
+            # no reroute is pending yet. Flags a reroute for the NEXT leg's plan;
+            # does not stop (option A: swap at next waypoint). Tier 2 above stays
+            # the in-segment safety net while the robot finishes this short hop.
+            if (
+                self._speed_pad_voxels_live > 0
+                and self._reroute_pad_voxels == 0
+                and self._exec_goal_voxel is not None
+                and self.astar_recheck_period_sec >= 0.0
+                and (now_t - self._last_exec_recheck) >= self.astar_recheck_period_sec
+            ):
+                self._last_exec_recheck = now_t
+                if self._exec_route_blocked():
+                    self._reroute_pad_voxels = self._speed_pad_voxels_live
+                    self.status_pub.publish(
+                        "ASTAR_EXEC_REPLAN pad_voxels=%d speed=%.3f goal=%s"
+                        % (
+                            self._reroute_pad_voxels,
+                            self._current_tcp_speed,
+                            self._exec_goal_voxel,
+                        )
+                    )
+                    rospy.logwarn(
+                        "In-motion A* re-check: route to %s blocked at %.3f m/s; "
+                        "latching pad=%d voxels, will reroute at next waypoint.",
+                        self._exec_goal_voxel,
+                        self._current_tcp_speed,
+                        self._reroute_pad_voxels,
+                    )
+
             self._record_breadcrumb_if_due()
             rate.sleep()
 
         self.group.stop()
         self.group.clear_pose_targets()
+        # Segment finished: live padding resets (robot stopping); any reroute
+        # latch is kept so the next waypoint's plan sees the inflated obstacles.
+        self._speed_pad_voxels_live = 0
+        self._current_tcp_speed = 0.0
+        self._exec_goal_voxel = None
 
         elapsed_ms = (time.time() - started) * 1000.0
         self.execution_time_pub.publish(Float32(data=elapsed_ms))
@@ -2518,6 +2819,28 @@ class UR3FixedJointABNode:
                 if self._try_breadcrumb_hop(joint_map):
                     continue  # retry the real target from the cached free pose
 
+            # B+C: if the goal joint state is itself in collision, OMPL will keep
+            # failing in ~tens of ms forever. Escalate to detour/hold (which only
+            # releases once the goal is valid again) instead of busy-retrying a
+            # guaranteed-invalid target. None (service unavailable) -> old path.
+            if should_escalate_to_detour(False, self.goal_state_in_collision(joint_map)):
+                rospy.logwarn_throttle(
+                    2.0,
+                    f"Goal state for waypoint {index}/{total} is in collision; "
+                    "escalating to detour/hold instead of replanning in place.",
+                )
+                self.plan_logger.log(
+                    "DETOUR", "ESCALATE",
+                    reason="goal_state_in_collision",
+                    goal=self._joint_map_goal_xyz(joint_map),
+                    n_human=len(self.latest_human_points()),
+                    detail="goal joint state in collision; OMPL would loop",
+                )
+                if not self.run_detour_if_hand_blocks_waypoint(joint_map, index):
+                    return False
+                breadcrumb_hop_tried = False  # allow a fresh hop after clearing
+                continue
+
             if self.max_replan_attempts > 0 and attempt >= self.max_replan_attempts:
                 rospy.logwarn(
                     f"Failed to find a valid plan for waypoint {index}/{total} "
@@ -2530,7 +2853,14 @@ class UR3FixedJointABNode:
             )
             rospy.sleep(self.replan_retry_period)
 
-        ok = self.execute_plan(plan)
+        # Segment goal voxel for the in-motion A* re-check (None -> re-check off).
+        goal_voxel = None
+        target_pose = self.target_tcp_pose_for_joint_map(joint_map)
+        if target_pose is not None:
+            tp = target_pose.pose.position
+            goal_voxel = self.world_to_voxel(tp.x, tp.y, tp.z)
+
+        ok = self.execute_plan(plan, goal_voxel=goal_voxel)
         if not ok:
             return False
 
@@ -2589,7 +2919,32 @@ class UR3FixedJointABNode:
         rospy.loginfo("ur3_fixed_joint_ab_node finished.")
 
 
+def _selftest() -> None:
+    """Assert-based check for the pure speed->padding math. Run with --selftest
+    (no ROS needed): python3 planner_ab_replan_node.py --selftest"""
+    f = speed_padding_meters
+    assert f(0.0, 0.05, 1.0, 0.05) == 0.0            # below deadband -> 0
+    assert f(0.04, 0.05, 1.0, 0.05) == 0.0           # below deadband -> 0
+    assert abs(f(0.10, 0.05, 0.5, 0.05) - 0.025) < 1e-9  # linear region
+    assert f(0.20, 0.05, 1.0, 0.05) == 0.05          # capped at max
+    assert f(5.0, 0.05, 1.0, 0.05) == 0.05           # cap holds at high speed
+    assert f(5.0, 0.05, 0.0, 0.05) == 0.0            # gain 0 -> disabled
+    assert f(5.0, 0.05, 1.0, 0.0) == 0.0             # max 0 -> disabled
+    print("planner speed_padding_meters self-check OK")
+
+    g = should_escalate_to_detour
+    assert g(True, None) is True       # hand blocks -> escalate regardless
+    assert g(True, False) is True      # hand blocks even if goal valid
+    assert g(False, True) is True      # goal in collision -> escalate
+    assert g(False, False) is False    # clear + valid goal -> no escalate
+    assert g(False, None) is False     # validity unknown -> preserve old path
+    print("planner should_escalate_to_detour self-check OK")
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        _selftest()
+        sys.exit(0)
     try:
         node = UR3FixedJointABNode()
         node.spin()

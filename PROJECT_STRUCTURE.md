@@ -18,6 +18,7 @@
 9. [Module: moveit\_scene\_manager.py](#9-module-moveit_scene_managerpy)
 10. [Module: planner\_ab\_replan\_node.py](#10-module-planner_ab_replan_nodepy)
 11. [Module: astar\_improved\_3d.py](#11-module-astar_improved_3dpy)
+11b. [Module: astar\_lpa\_3d.py](#11b-module-astar_lpa_3dpy)
 12. [ROS Topics & TF](#12-ros-topics--tf)
 13. [Launch Files](#13-launch-files)
 14. [So sánh Single Kinect vs Dual Kinect](#14-so-sánh-single-kinect-vs-dual-kinect)
@@ -206,7 +207,9 @@ catkin_ws/
 │   │   │   ├── skeleton_obstacle_builder.py      # [MODULE D] Xây dựng vật cản
 │   │   │   ├── moveit_scene_manager.py           # [MODULE E] Quản lý MoveIt scene
 │   │   │   ├── planner_ab_replan_node.py         # [MODULE F] Lập kế hoạch + thực thi
-│   │   │   └── astar_improved_3d.py              # [MODULE G] ARA* (Anytime Repairing A*)
+│   │   │   ├── astar_improved_3d.py              # [MODULE G] ARA* (Anytime Repairing A*)
+│   │   │   ├── astar_lpa_3d.py                   # [MODULE G] LPA* (Lifelong Planning A*) - guard planner thay thế, chọn bằng ~guard_planner_type
+│   │   │   └── test_astar_lpa_3d.py              # [TEST] self-test offline cho LPAStar3D (python3 scripts/test_astar_lpa_3d.py)
 │   │   │
 │   │   ├── launch/
 │   │   │   ├── system.launch                     # Khởi động Single Kinect (front)
@@ -819,6 +822,47 @@ class PlanResult:           # (cũng export là DStarResult để tương thích
 | `PATH_EXTRACTION_FAILED` | Không reconstruct được path |
 | `REPLAN_NOT_INITIALIZED` | Gọi replan trước khi plan lần đầu |
 | `EMPTY_GRID` | Lưới voxel không hợp lệ |
+
+---
+
+## 11b. Module: `astar_lpa_3d.py`
+
+**Chức năng:** Thuật toán **LPA\* (Lifelong Planning A\*)** trong voxel grid 3D. Thư viện thuần Python (không ROS node). Guard planner **thay thế** cho `AStarImproved3D`, **drop-in cùng API** (`plan_with_info` / `replan_with_info` / `plan` / `replan` / `set_penalty_cells`, cùng `PlanResult` + reason constants — import từ `astar_improved_3d`). Chọn bằng param `~guard_planner_type` trong Module F. Mặc định Module F vẫn dùng `ara_star`; đặt `lpa_star` để bật LPA*.
+
+**Ý tưởng:** giữ lại search cũ, khi obstacle người thay đổi cục bộ thì chỉ **repair** các cell bị ảnh hưởng (`g`/`rhs`, update_vertex) thay vì plan lại từ đầu. Khi goal đổi (Module F tự gọi `plan_with_info`) hoặc start dịch chuyển hoặc obstacle diff quá lớn → **reset** (`initialize_search`).
+
+### Class: `LPAStar3D`
+
+| Phương thức | Chức năng |
+|-------------|-----------|
+| `__init__(size_x, size_y, size_z, diagonal, max_time_ms, max_steps, smooth, epsilon, start_reuse_radius_voxels, max_changed_obstacles_for_repair)` | Khởi tạo grid + LPA* params |
+| `plan_with_info(start, goal, obstacles) → PlanResult` | RESET: `initialize_search` + `compute_shortest_path` |
+| `replan_with_info(new_start, obstacles) → PlanResult` | Giữ goal nội bộ; REPAIR (`update_obstacles`) nếu start không đổi và diff nhỏ, ngược lại RESET |
+| `plan` / `replan` | Wrapper trả path list |
+| `set_penalty_cells(cells, weight)` | Soft region-preference, tương thích Module F (gộp vào cost cạnh) |
+| `update_vertex(u)` / `compute_shortest_path()` / `update_obstacles(new)` / `reconstruct_path()` | Core LPA* |
+
+### Metrics (`PlanResult.metrics`)
+
+`algorithm="LPA*"`, `success`, `reason`, `path_length`, `expanded_steps`, `planning_time_ms`, `obstacle_count`, `changed_obstacle_count`, `reuse_mode` (`RESET`/`REPAIR`).
+
+### Tham số LPA* (khởi tạo)
+
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `epsilon` | `1.0` | 1.0 = tối ưu. >1 (weighted) để sau |
+| `max_time_ms` / `max_steps` | từ `ara_max_time_ms` / `ara_max_steps` | Ngân sách dùng chung với ARA* |
+| `start_reuse_radius_voxels` | `1` | **Reserved**: v1 chỉ REPAIR khi start không đổi; mọi dịch chuyển start → RESET (re-root để v2) |
+| `max_changed_obstacles_for_repair` | `500` | Diff > ngưỡng → RESET (repair đắt hơn reset). Cần calibrate theo grid thật |
+
+### Giới hạn đã biết (v1)
+
+- Reason codes external giống ARA* (reuse hằng số từ `astar_improved_3d`); phân biệt reset/repair nằm ở `reuse_mode`.
+- Khác ARA* (anytime): hết ngân sách → trả `TIMEOUT` **không có path**, không trả best-so-far. Với grid lớn cần đặt `ara_max_time_ms` đủ rộng.
+- REPAIR khi diff lớn có thể chậm hơn RESET → dùng `max_changed_obstacles_for_repair`.
+- Chưa có: shadow mode, weighted-ε, D* Lite, benchmark harness (xem spec `docs/superpowers/specs/2026-06-20-lpa-star-3d-guard-planner-design.md`).
+
+**Test:** `python3 scripts/test_astar_lpa_3d.py` (6 case: empty/static/start-blocked/goal-blocked/repair/reset, cross-check cost với ARA*).
 
 ---
 

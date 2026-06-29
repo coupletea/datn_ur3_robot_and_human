@@ -15,6 +15,7 @@
 | **E** — `moveit_scene_manager.py` | [MODULE_E_moveit_scene_manager.md](MODULE_E_moveit_scene_manager.md) | ROS Node | Apply CollisionObject vào MoveIt planning scene |
 | **F** — `planner_ab_replan_node.py` | [MODULE_F_planner_ab_replan_node.md](MODULE_F_planner_ab_replan_node.md) | ROS Node | Lập kế hoạch + thực thi UR3 (ARA* guard + MoveIt) |
 | **G** — `astar_improved_3d.py` | [MODULE_G_astar_improved_3d.md](MODULE_G_astar_improved_3d.md) | Library | ARA* (Anytime Repairing A*) voxel 3D guard planner |
+| **G** — `astar_lpa_3d.py` | [PROJECT_STRUCTURE.md §11b](../PROJECT_STRUCTURE.md) | Library | LPA* (Lifelong Planning A*) guard planner thay thế, drop-in API, chọn bằng `~guard_planner_type` |
 
 ---
 

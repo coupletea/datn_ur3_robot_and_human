@@ -106,9 +106,11 @@ run_path(path_a_to_b)
 | `current_robot_hand_min_distance() → Optional[(float, str)]` | — | Khoảng cách tối thiểu hiện tại robot→người (dùng trong execute monitor) |
 | `trajectory_speed_margin(prev_poses, curr_poses, dt) → float` | poses trước/sau, delta time | Tính thêm margin an toàn theo tốc độ robot (robot nhanh → margin lớn hơn) |
 | `hand_blocks_target_pose(pose) → bool` | `PoseStamped` | Kiểm tra tay người có trong vùng bán kính `hand_block_radius` xung quanh waypoint đích không |
+| `goal_state_in_collision(joint_map) → Optional[bool]` | dict | Gọi MoveIt `check_state_validity` cho goal joint state. `True`=goal in-collision (OMPL sẽ reject ~vài chục ms), `False`=hợp lệ, `None`=service không có (giữ hành vi cũ) |
+| `waypoint_obstructed(joint_map, target_pose) → bool` | dict, pose | Cổng detour gộp: tay chặn pose **HOẶC** goal state in-collision. Khớp đúng cái OMPL reject (fix B+C) |
 | `plan_and_execute_detour_with_retry(pose, label) → bool` | pose, str | ARA* gate + MoveIt detour tối đa `max_detour_attempts`, có backoff |
-| `hold_until_waypoint_clear(target_pose, index) → bool` | pose, int | Sau khi hết detour attempts, đứng yên và chỉ poll blocker; không gọi planner |
-| `run_detour_if_hand_blocks_waypoint(joint_map, index) → bool` | dict, int | Chạy detour +Z; nếu hết attempts thì HOLD tới khi waypoint clear |
+| `hold_until_waypoint_clear(joint_map, target_pose, index) → bool` | dict, pose, int | Sau khi hết detour attempts, đứng yên và poll `waypoint_obstructed`; chỉ release khi goal hợp lệ + tay rời |
+| `run_detour_if_hand_blocks_waypoint(joint_map, index) → bool` | dict, int | Trigger detour khi `waypoint_obstructed`; chạy detour +Z; nếu hết attempts thì HOLD tới khi waypoint clear |
 
 ### Nhóm: Lập kế hoạch & Thực thi
 
@@ -118,7 +120,7 @@ run_path(path_a_to_b)
 | `plan_to_pose(pose_goal, planning_time=None) → Optional[Plan]` | `PoseStamped`, float | ARA* gate trước OMPL; dùng timeout tùy chọn rồi restore timeout planner chính |
 | `execute_plan(plan) → bool` | `MoveItPlan` | Thực thi plan + monitor loop: nếu khoảng cách robot→người < `required_clearance` → `group.stop()` (emergency stop) |
 | `retime_plan(plan) → Plan` | `MoveItPlan` | Retime trajectory theo `velocity_scaling` và `acceleration_scaling` |
-| `run_waypoint(joint_map, index, total, direction) → bool` | | Chạy 1 waypoint: detour check → replan loop (ARA* + MoveIt + safety + execute) |
+| `run_waypoint(joint_map, index, total, direction) → bool` | | Chạy 1 waypoint: detour check → replan loop (ARA* + MoveIt + safety + execute). Plan fail + goal in-collision → escalate detour/hold (fix B) thay vì retry vô hạn |
 | `run_path(path, direction) → bool` | list waypoints, `"A→B"/"B→A"` | Chạy toàn bộ path (gọi `run_waypoint` lần lượt) |
 | `spin()` | — | Vòng lặp chính A→B→A |
 
@@ -135,6 +137,19 @@ run_path(path_a_to_b)
 
 ## Cấu hình — ROS Parameters
 
+### Guard planner selection
+
+| Tham số | Mặc định | Mô tả |
+|---------|----------|-------|
+| `~guard_planner_type` | `ara_star` | Chọn guard planner TCP voxel: `ara_star` = `AStarImproved3D` (mặc định, giữ nguyên), `lpa_star` = `LPAStar3D` (incremental repair, drop-in API). Factory ở `__init__`. Xem `PROJECT_STRUCTURE.md` §11b + spec `docs/superpowers/specs/2026-06-20-lpa-star-3d-guard-planner-design.md` |
+| `~lpa_epsilon` | `1.0` | (LPA*) hệ số heuristic; 1.0 = tối ưu |
+| `~lpa_start_reuse_radius_voxels` | `1` | (LPA*) reserved; v1 chỉ REPAIR khi start không đổi |
+| `~lpa_max_changed_obstacles_for_repair` | `500` | (LPA*) obstacle diff > ngưỡng → RESET thay vì REPAIR |
+
+> LPA* dùng chung ngân sách `~ara_max_time_ms` / `~ara_max_steps`. Khác ARA*: hết giờ → `TIMEOUT` không có path (ARA* anytime trả best-so-far). Mọi call site (`plan_with_info`/`replan_with_info`/`set_penalty_cells`) giữ nguyên — API drop-in.
+>
+> **Runtime:** code default `ara_star`, nhưng cả 3 launch (`system.launch`, `system_back.launch`, `dual_kinect_system.launch`) hiện set `guard_planner_type=lpa_star` (kèm `lpa_epsilon=1.0`, `lpa_start_reuse_radius_voxels=1`, `lpa_max_changed_obstacles_for_repair=500`). Đổi value về `ara_star` để quay lại ARA*.
+
 ### ARA* Guard
 
 | Tham số | Mặc định | Mô tả |
@@ -142,8 +157,8 @@ run_path(path_a_to_b)
 | `~ara_epsilon_start` | `3.0` | Hệ số heuristic ban đầu ARA* |
 | `~ara_epsilon_final` | `1.0` | Hệ số heuristic tối thiểu (1.0 = exact A*) |
 | `~ara_epsilon_decay` | `0.5` | Giảm ε mỗi iteration |
-| `~ara_max_time_ms` | `50.0` | Ngân sách thời gian ARA* (ms) |
-| `~ara_max_steps` | `50000` | Số bước expand tối đa |
+| `~ara_max_time_ms` | `50.0` | Ngân sách thời gian ARA* (ms) — cũng dùng cho LPA* |
+| `~ara_max_steps` | `50000` | Số bước expand tối đa — cũng dùng cho LPA* |
 | `~voxel_size` | `0.05` | Kích thước 1 voxel (m) |
 | `~human_inflate_radius` | `0` | Số voxel inflate xung quanh khớp người |
 | `~obstacle_inflate_sphere` | `True` | Inflate hình **cầu** (bỏ góc cube ngoài clearance) → giảm ~3.8× số voxel. `false` = cube đặc cũ |
@@ -169,6 +184,11 @@ run_path(path_a_to_b)
 | `~pan_limit_margin` | `0.10` | Nới dải pan (rad) quanh min/max waypoint |
 | `~shoulder_pan_min` / `~shoulder_pan_max` | `None` | Override dải pan (rad); None = tự suy từ waypoint |
 | `~enable_astar_guard` | `True` | Bật/tắt ARA* guard |
+| `~astar_speed_padding_gain` | `0.0` | m padding / (m/s) trên deadband. `0` = tắt (padding luôn 0, hành vi như cũ) |
+| `~astar_speed_padding_deadband_mps` | `0.05` | Tốc độ TCP (m/s) dưới ngưỡng này → padding 0 |
+| `~astar_max_speed_padding_m` | `0.05` | Cap padding (m) |
+| `~astar_speed_padding_smoothing_alpha` | `0.7` | EMA làm mượt tốc độ TCP đo được |
+| `~astar_recheck_period_sec` | `0.2` | Chu kỳ A* re-check trong lúc execute. `<=0` = tắt re-check (vẫn inflate theo speed, không trigger reroute) |
 
 ### An toàn
 
@@ -189,6 +209,7 @@ run_path(path_a_to_b)
 | `~detour_planning_time` | `0.75` | MoveIt timeout riêng cho mỗi detour attempt (s) |
 | `~detour_hold_poll_period` | `0.5` | Chu kỳ kiểm tra waypoint trong HOLD (s) |
 | `~detour_z_offset` | `0.07` | Offset +Z mặc định; launch single/dual đặt lần lượt `0.15m`/`0.20m` |
+| `~state_validity_service` | `/check_state_validity` | Service MoveIt kiểm tra goal joint state in-collision (fix B+C). Không có → escalation tắt, giữ hành vi cũ |
 
 ### MoveIt & Execution
 
@@ -196,8 +217,45 @@ run_path(path_a_to_b)
 |---------|----------|-------|
 | `~velocity_scaling` | `0.3` | Scale tốc độ thực thi (0–1) |
 | `~acceleration_scaling` | `0.3` | Scale gia tốc thực thi (0–1) |
+| `~planning_time` | `10.0` | Budget OMPL mỗi `plan()` (s). Launch đặt `1.0` để fail nhanh. Chỉ cắn khi plan khó; planner feasible trả về ngay khi có path |
+| `~planning_attempts` | `10` | Số lần solve-from-scratch mỗi `plan()`, trả shortest. Launch đặt `1` (bỏ best-of-N) → giảm ~N× plan time trên success. Guard A* + `trajectory_is_safe` vẫn gác an toàn |
 | `~sync_scene_with_planner` | `True` | Yêu cầu scene confirmed trước khi plan |
 | `~scene_status_timeout_sec` | `30.0` | Tuổi tối đa scene status còn hợp lệ |
+
+## Speed-scaled A* Padding + In-Motion Reroute (padding theo tốc độ robot)
+
+Khi robot chạy nhanh, inflate obstacle A* rộng hơn để planner né xa hơn. Mặc định
+`~astar_speed_padding_gain=0.0` → padding luôn 0 → **hành vi y như cũ** cho tới khi
+tune trên hardware (calibration knob).
+
+- **Đo tốc độ TCP (live):** `_update_tcp_speed()` chạy mỗi vòng execution-monitor
+  (`~execution_monitor_rate`, 20 Hz), tính tốc độ từ delta vị trí end-effector / dt,
+  EMA làm mượt (`~astar_speed_padding_smoothing_alpha`).
+- **Speed → padding:** hàm thuần `speed_padding_meters(speed, deadband, gain, max)` →
+  `pad_m = clamp(gain*(speed-deadband), 0, max)`; `_speed_padding_voxels()` đổi sang
+  số voxel (`ceil(pad_m/voxel_size)`). Kiểm thử nhanh: `python3 planner_ab_replan_node.py --selftest`.
+- **Inflate A*:** `active_human_voxels()` cộng thêm `max(pad_live, pad_latched)` voxel
+  vào bán kính inflate. Lúc plan robot đứng yên → speed≈0 → padding 0 (backward compatible).
+- **Two-tier re-check trong `execute_plan` (chạy khi đang di chuyển):**
+  - **Tier 2 — quá gần:** emergency-stop sẵn có (`base_clearance + execution_speed_safety_margin`),
+    dừng ngay, return `False` (status `EXECUTION_STOPPED_HUMAN_TOO_CLOSE`). Là safety floor, không đổi.
+  - **Tier 1 — route phía trước bị chặn:** mỗi `~astar_recheck_period_sec`, chạy A* fresh từ
+    voxel TCP hiện tại → `_exec_goal_voxel` với obstacle đã inflate theo speed. Nếu bị chặn:
+    **không dừng**; latch `_reroute_pad_voxels` (giá trị padding đo được lúc đang chạy),
+    publish `ASTAR_EXEC_REPLAN`, để segment ngắn hiện tại chạy hết tới waypoint. Reroute áp
+    dụng ở plan của **leg kế tiếp** (option A: swap at next waypoint). Tier 2 vẫn bảo vệ trong segment.
+- **Latch lifecycle:** set khi Tier 1 phát hiện chặn; `active_human_voxels()` dùng tới khi
+  plan của waypoint kế tiêu thụ; clear ở đầu `execute_plan` (khi segment mới bắt đầu chuyển động).
+- **Goal voxel:** `run_waypoint()` tính từ `target_tcp_pose_for_joint_map(joint_map)` và truyền
+  vào `execute_plan(plan, goal_voxel=...)`. `None` (FK không có) → tắt re-check cho leg đó.
+- **Waypoint nhỏ hơn = phản ứng nhanh hơn:** tăng `~resampled_waypoint_count` để segment ngắn,
+  độ trễ reroute và swap-stop nhỏ. Breadcrumb cache warm-start cho replan. Không thêm code.
+
+Lưu ý: re-check dùng `self.astar.plan_with_info()` rồi reset `_astar_last_goal=None` +
+`_first_plan_done=False` để guard plan-time sau đó plan lại sạch (tránh lẫn state incremental).
+
+Giới hạn: MoveIt không blend trajectory; "plan while moving" = **quyết định** chạy khi di
+chuyển, **swap** quỹ đạo vẫn cần dừng ngắn tại waypoint. Non-stop blend cần `moveit_servo` (ngoài scope).
 
 ## Ghi chú thay đổi blocker
 
@@ -206,6 +264,21 @@ run_path(path_a_to_b)
 - Detour không còn dùng `max_replan_attempts=0` vô hạn. Sau `max_detour_attempts`, planner publish `DETOUR_HOLD`, không replan và chỉ resume khi `hand_blocks_target_pose()` trả false.
 - Theo cấu hình hiện tại, skeleton thiếu/stale làm tập điểm người rỗng nên HOLD xem waypoint đã clear.
 - `latest_human_points()` và `trajectory_is_safe()` không còn gọi filter điểm gần link robot hoặc gần planned path. Rủi ro: robot self-detect có thể được xem là điểm người thật, nhưng task này ưu tiên không chặn skeleton/voxel build.
+
+## Goal-collision escalation (fix B+C — chống kẹt OMPL vô hạn)
+
+**Triệu chứng (từ log):** A* báo `ASTAR/OK path=2` nhưng OMPL báo `MOVEIT/FAILED reason=moveit_no_plan` lặp hàng trăm lần, mỗi lần ~vài chục ms (≪ `planning_time` 1.0s). `plan_ms` nhỏ ⇒ OMPL **reject start/goal joint state in-collision ngay**, không phải search hết giờ. Với `max_replan_attempts=0`, `run_waypoint()` retry mãi ⇒ robot đứng yên tới khi người rời thì goal mới hợp lệ. Detour không kích hoạt vì `hand_blocks_target_pose()` (đo khoảng cách điểm) bất đồng với collision toàn-thân-arm của OMPL.
+
+**Nguyên nhân gốc:** A* chỉ validate đường đi **điểm TCP** trên voxel grid; OMPL validate **toàn bộ joint config + thân arm** trên PlanningScene. Link arm chạm người dù ô TCP trống ⇒ A* greenlight goal mà OMPL từ chối.
+
+**Fix:**
+- **B —** `run_waypoint()`: khi plan fail và `goal_state_in_collision(joint_map) is True` → escalate sang `run_detour_if_hand_blocks_waypoint` thay vì busy-retry goal chắc chắn invalid. Log `DETOUR/ESCALATE reason=goal_state_in_collision`.
+- **C —** Cổng detour và release của HOLD dùng `waypoint_obstructed()` = tay chặn **HOẶC** goal in-collision (khớp OMPL), không chỉ `hand_blocks_target_pose()`. HOLD chỉ release khi goal thật sự hợp lệ.
+- Quyết định tách thành hàm thuần `should_escalate_to_detour(hand_blocks, goal_in_collision)` (unit-check trong `--selftest`).
+
+**An toàn:** Chỉ **thêm** một escape sớm + làm cổng detour bảo thủ hơn (khớp OMPL). Không nới lỏng safety nào. Service `check_state_validity` thiếu → `goal_state_in_collision` trả `None` → `should_escalate_to_detour(..., None)=False` ⇒ về đúng hành vi cũ. Tắt bằng `~state_validity_service` trỏ service không tồn tại.
+
+**Kiểm thử:** `python3 planner_ab_replan_node.py --selftest` (assert cho `should_escalate_to_detour`).
 
 ## Obstacle Stability Cache (chống drop voxel A*)
 

@@ -107,16 +107,21 @@ self._last_path: List[Voxel]
 
 ## 6. Reset vs repair vs cache
 
-Decided at the top of `replan_with_info` (and `plan_with_info` always resets):
+Decided at the top of `replan_with_info` (`plan_with_info` always resets). Goal
+changes are routed to `plan_with_info` by Module F, so `replan_with_info` only sees
+the same goal.
 
 | Condition | Action (`reuse_mode`) |
 |---|---|
-| first call / no prior search state | `RESET` |
-| `goal != self._goal` | `RESET` (heuristic depends on goal) |
-| start moved `> start_reuse_radius_voxels` | `RESET` |
+| first call / not initialized | validation returns `REPLAN_NOT_INITIALIZED` |
+| `new_start != self._start` (any move) | `RESET` (start re-root deferred to v2; RESET is always correct) |
 | `changed_obstacle_count > max_changed_obstacles_for_repair` | `RESET` (repair costlier than reset) |
-| same goal, start within radius, obstacles changed | `REPAIR`: move start (`rhs(start)=0`), `update_obstacles`, `compute_shortest_path` |
-| nothing changed and `_last_path` still valid | `CACHE`: return cached path |
+| same start, diff within threshold | `REPAIR`: `update_obstacles`, `compute_shortest_path` |
+
+**v1 simplifications** (ponytail, vs the original long proposal): no path **CACHE**
+mode — a no-change replan just re-runs `compute_shortest_path`, which returns
+immediately when everything is consistent. No start re-root — any start movement
+RESETs. `start_reuse_radius_voxels` is accepted but reserved for v2.
 
 `initialize_search(start, goal, obstacles)` clears `g/rhs/parent/open`, sets
 `rhs(start)=0`, `g(start)=INF`, pushes start.
@@ -178,16 +183,23 @@ the API is drop-in. `self.astar` name kept.
   "planning_time_ms": float,
   "obstacle_count": int,
   "changed_obstacle_count": int,
-  "reuse_mode": "RESET" | "REPAIR" | "CACHE",
+  "reuse_mode": "RESET" | "REPAIR",
 }
 ```
 
 External reason codes match `AStarImproved3D` (reuse existing constants). No new
 reason strings leak to Module F; the reset/repair distinction lives in `reuse_mode`.
 
+**Known limitation:** unlike ARA\* (anytime), LPA\* on budget exhaustion returns
+`TIMEOUT` with **no** path rather than a best-so-far path. With a large grid,
+`~ara_max_time_ms` must be set generously. REPAIR over a large obstacle diff can
+cost more than a fresh RESET — hence the `max_changed_obstacles_for_repair`
+threshold (calibrate on the real grid).
+
 ## 10. Test (offline, no ROS)
 
-`python3 scripts/astar_lpa_3d.py --selftest`, assert-based:
+`python3 scripts/test_astar_lpa_3d.py`, assert-based (separate test file, not a
+`--selftest` flag — avoids production importing test code):
 
 1. Empty small grid → path found; `path[0]==start`, `path[-1]==goal`, every step is a
    valid neighbor, no voxel in obstacle set.
@@ -208,8 +220,8 @@ reason strings leak to Module F; the reset/repair distinction lives in `reuse_mo
 
 ## 12. Files touched
 
-- Add: `scripts/astar_lpa_3d.py`.
-- Edit: `scripts/planner_ab_replan_node.py` (import + factory + 4 params).
+- Add: `scripts/astar_lpa_3d.py`, `scripts/test_astar_lpa_3d.py`.
+- Edit: `scripts/planner_ab_replan_node.py` (import + factory + 4 params + loginfo).
 - `scripts/astar_improved_3d.py`: **not edited** in v1 (import-only reuse of its
   module-level symbols).
 - Docs: update `PROJECT_STRUCTURE.md` (new file) and `docs/MODULE_G_*` after code.
